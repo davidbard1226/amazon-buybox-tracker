@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+*.pyo
+.env
+tracker_data.json
+*.log
+node_modules/
+frontend/node_modules/
+frontend/build/
+*.bat
