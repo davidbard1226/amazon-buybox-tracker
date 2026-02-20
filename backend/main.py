@@ -19,8 +19,14 @@ from pydantic import BaseModel
 from bs4 import BeautifulSoup
 from loguru import logger
 from database import init_db, get_db, save_asin, save_price_history, get_all_asins, get_price_history, delete_asin, TrackedASIN, PriceHistory
-from alerts import send_whatsapp_alert, load_alert_settings, save_alert_settings
-from scheduler import start_scheduler, stop_scheduler, get_scheduler_status, update_scheduler_interval
+try:
+    from alerts import send_whatsapp_alert, load_alert_settings, save_alert_settings
+    from scheduler import start_scheduler, stop_scheduler, get_scheduler_status, update_scheduler_interval, refresh_all_asins
+    SCHEDULER_AVAILABLE = True
+    logger.info("Scheduler and alerts modules loaded successfully")
+except Exception as e:
+    SCHEDULER_AVAILABLE = False
+    logger.warning(f"Scheduler/alerts not available: {e}")
 
 # ============================================================================
 # FastAPI App Setup
@@ -360,14 +366,15 @@ def get_amazon_buybox(asin: str, marketplace: str = "amazon.co.za") -> dict:
 def startup_event():
     init_db()
     logger.info("Database initialized on startup")
-    # Start the background scheduler
-    start_scheduler()
-    logger.info("Scheduler started")
+    if SCHEDULER_AVAILABLE:
+        start_scheduler()
+        logger.info("Scheduler started")
 
 @app.on_event("shutdown")
 def shutdown_event():
-    stop_scheduler()
-    logger.info("Scheduler stopped")
+    if SCHEDULER_AVAILABLE:
+        stop_scheduler()
+        logger.info("Scheduler stopped")
 
 # Serve static files (dashboard)
 static_dir = os.path.join(os.path.dirname(__file__), "static")
@@ -493,29 +500,36 @@ def get_stats(db: Session = Depends(get_db)):
 
 @app.get("/api/alerts/settings")
 def get_alert_settings():
+    if not SCHEDULER_AVAILABLE:
+        return {"whatsapp_phone": "", "callmebot_apikey": "", "alert_losing": True, "alert_winning": True, "alert_amazon": True}
     return load_alert_settings()
 
 @app.post("/api/alerts/settings")
 def update_alert_settings(settings: dict):
+    if not SCHEDULER_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Alerts module not available")
     save_alert_settings(settings)
     return {"message": "Settings saved", "settings": settings}
 
 @app.post("/api/alerts/test")
 def test_whatsapp():
+    if not SCHEDULER_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Alerts module not available")
     settings = load_alert_settings()
     phone = settings.get("whatsapp_phone")
     apikey = settings.get("callmebot_apikey")
     if not phone or not apikey:
         raise HTTPException(status_code=400, detail="WhatsApp phone and CallMeBot API key required")
     success = send_whatsapp_alert(
-        phone=phone,
-        apikey=apikey,
-        message="✅ Test alert from your Amazon Buybox Tracker! Alerts are working correctly."
+        phone=phone, apikey=apikey,
+        message="Test alert from your Amazon Buybox Tracker! Alerts are working correctly."
     )
     return {"success": success, "message": "Test alert sent!" if success else "Failed to send alert"}
 
 @app.get("/api/scheduler/status")
 def scheduler_status():
+    if not SCHEDULER_AVAILABLE:
+        return {"enabled": False, "interval_hours": 6.0, "running": False, "last_run": None, "next_run": None, "total_asins": 0, "error": "Scheduler module not loaded"}
     return get_scheduler_status()
 
 class SchedulerSettings(BaseModel):
@@ -524,13 +538,15 @@ class SchedulerSettings(BaseModel):
 
 @app.post("/api/scheduler/settings")
 def update_scheduler(settings: SchedulerSettings, db: Session = Depends(get_db)):
+    if not SCHEDULER_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Scheduler module not available")
     update_scheduler_interval(settings.interval_hours, settings.enabled, db)
     return {"message": f"Scheduler updated - runs every {settings.interval_hours} hours", "enabled": settings.enabled}
 
 @app.post("/api/scheduler/run-now")
 def run_now(db: Session = Depends(get_db)):
-    """Manually trigger a refresh of all tracked ASINs."""
-    from scheduler import refresh_all_asins
+    if not SCHEDULER_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Scheduler module not available")
     refresh_all_asins(db)
     return {"message": "Manual refresh triggered for all tracked ASINs"}
 
