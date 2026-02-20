@@ -115,6 +115,7 @@ tr:hover td{background:rgba(255,255,255,0.02);}
       <button class="nav-btn" onclick="showPage('lookup')">🔍 Lookup</button>
       <button class="nav-btn" onclick="showPage('bulk')">📋 Bulk Upload</button>
       <button class="nav-btn" onclick="showPage('analytics')">📊 Analytics</button>
+      <button class="nav-btn" onclick="showPage('settings')">⚙️ Settings</button>
     </div>
     <span id="backendBadge" class="badge badge-offline">⚫ Offline</span>
   </div>
@@ -268,6 +269,81 @@ tr:hover td{background:rgba(255,255,255,0.02);}
         <tbody id="analyticsBody"></tbody>
       </table>
     </div>
+  </div>
+<!-- SETTINGS PAGE -->
+<div id="page-settings" class="page">
+  <div class="card">
+    <h2>📱 WhatsApp Alerts (via CallMeBot - Free)</h2>
+    <p style="color:#94a3b8;margin-bottom:18px;font-size:1rem;">Get WhatsApp messages when you lose or win the buybox. Uses free CallMeBot service.</p>
+    <div style="background:#1e3a5f;border:1px solid #3b82f6;border-radius:8px;padding:16px;margin-bottom:20px;font-size:0.95rem;color:#93c5fd;">
+      <b>📋 Setup Instructions:</b><br><br>
+      1. Save this number in your phone: <b>+34 644 52 74 61</b> (CallMeBot)<br>
+      2. Send this WhatsApp message to that number: <b>I allow callmebot to send me messages</b><br>
+      3. You'll receive an API key via WhatsApp within a minute<br>
+      4. Enter your number and API key below, then click Save
+    </div>
+    <div class="form-row" style="margin-bottom:16px;">
+      <div class="form-group" style="flex:1;">
+        <label>Your WhatsApp Number (with country code, no +)</label>
+        <input type="text" id="waPhone" placeholder="27821234567" />
+      </div>
+      <div class="form-group" style="flex:1;">
+        <label>CallMeBot API Key</label>
+        <input type="text" id="waApiKey" placeholder="Your API key from CallMeBot" />
+      </div>
+    </div>
+    <div class="form-row" style="margin-bottom:16px;">
+      <div class="form-group">
+        <label>Alert me when:</label>
+        <div style="display:flex;gap:16px;margin-top:8px;">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;color:#e2e8f0;">
+            <input type="checkbox" id="alertLosing" checked style="width:18px;height:18px;" /> 😞 I lose the buybox
+          </label>
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;color:#e2e8f0;">
+            <input type="checkbox" id="alertWinning" checked style="width:18px;height:18px;" /> 🏆 I win the buybox
+          </label>
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;color:#e2e8f0;">
+            <input type="checkbox" id="alertAmazon" checked style="width:18px;height:18px;" /> 🛒 Amazon takes buybox
+          </label>
+        </div>
+      </div>
+    </div>
+    <div style="display:flex;gap:12px;">
+      <button class="btn btn-primary" onclick="saveAlertSettings()">💾 Save Settings</button>
+      <button class="btn" style="background:#1e293b;border:1px solid #334155;color:#e2e8f0;" onclick="testWhatsApp()">📤 Send Test Message</button>
+    </div>
+    <div id="alertSettingsMsg" style="margin-top:12px;"></div>
+  </div>
+
+  <div class="card">
+    <h2>🔄 Auto-Refresh Scheduler</h2>
+    <p style="color:#94a3b8;margin-bottom:18px;font-size:1rem;">Automatically refresh buybox data for all tracked ASINs on a schedule.</p>
+    <div id="schedulerStatus" style="background:#0f172a;border-radius:8px;padding:16px;margin-bottom:18px;font-size:1rem;color:#94a3b8;">Loading scheduler status...</div>
+    <div class="form-row" style="margin-bottom:16px;">
+      <div class="form-group">
+        <label>Refresh Interval</label>
+        <select id="refreshInterval">
+          <option value="1">Every 1 hour</option>
+          <option value="2">Every 2 hours</option>
+          <option value="4">Every 4 hours</option>
+          <option value="6" selected>Every 6 hours</option>
+          <option value="12">Every 12 hours</option>
+          <option value="24">Every 24 hours</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Status</label>
+        <select id="schedulerEnabled">
+          <option value="true">✅ Enabled</option>
+          <option value="false">⏸ Disabled</option>
+        </select>
+      </div>
+    </div>
+    <div style="display:flex;gap:12px;">
+      <button class="btn btn-primary" onclick="saveSchedulerSettings()">💾 Save Schedule</button>
+      <button class="btn" style="background:#1e293b;border:1px solid #10b981;color:#10b981;" onclick="runNow()">⚡ Refresh All Now</button>
+    </div>
+    <div id="schedulerMsg" style="margin-top:12px;"></div>
   </div>
 </div>
 
@@ -688,6 +764,107 @@ function loadAnalytics() {
       <td style="color:#fbbf24;">${p.rating?'⭐ '+p.rating:'—'}</td>
       <td style="font-size:0.78rem;color:#94a3b8;">${fmtTime(p.scraped_at)}</td>
     </tr>`).join('');
+}
+
+// ── Settings Page ─────────────────────────────────────────────────
+async function loadSettings() {
+  try {
+    const r = await fetch(API + '/api/alerts/settings');
+    const d = await r.json();
+    if (d.whatsapp_phone) document.getElementById('waPhone').value = d.whatsapp_phone;
+    if (d.callmebot_apikey) document.getElementById('waApiKey').value = d.callmebot_apikey;
+    if (d.alert_losing !== undefined) document.getElementById('alertLosing').checked = d.alert_losing;
+    if (d.alert_winning !== undefined) document.getElementById('alertWinning').checked = d.alert_winning;
+    if (d.alert_amazon !== undefined) document.getElementById('alertAmazon').checked = d.alert_amazon;
+  } catch(e) {}
+  loadSchedulerStatus();
+}
+
+async function loadSchedulerStatus() {
+  try {
+    const r = await fetch(API + '/api/scheduler/status');
+    const d = await r.json();
+    const el = document.getElementById('schedulerStatus');
+    const nextRun = d.next_run ? new Date(d.next_run).toLocaleString() : 'Not scheduled';
+    const lastRun = d.last_run ? new Date(d.last_run).toLocaleString() : 'Never';
+    el.innerHTML = `
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px;">
+        <div><span style="color:#94a3b8;">Status:</span> <b style="color:${d.enabled ? '#10b981' : '#ef4444'}">${d.enabled ? '✅ Running' : '⏸ Paused'}</b></div>
+        <div><span style="color:#94a3b8;">Interval:</span> <b style="color:#f97316;">Every ${d.interval_hours || 6} hours</b></div>
+        <div><span style="color:#94a3b8;">Last Run:</span> <b>${lastRun}</b></div>
+        <div><span style="color:#94a3b8;">Next Run:</span> <b style="color:#3b82f6;">${nextRun}</b></div>
+        <div><span style="color:#94a3b8;">ASINs tracked:</span> <b>${d.total_asins || 0}</b></div>
+      </div>`;
+    if (d.interval_hours) {
+      const sel = document.getElementById('refreshInterval');
+      for (let o of sel.options) { if (parseFloat(o.value) === d.interval_hours) { o.selected = true; break; } }
+    }
+    document.getElementById('schedulerEnabled').value = d.enabled ? 'true' : 'false';
+  } catch(e) {
+    document.getElementById('schedulerStatus').innerHTML = '<span style="color:#ef4444;">Could not load scheduler status</span>';
+  }
+}
+
+async function saveAlertSettings() {
+  const settings = {
+    whatsapp_phone: document.getElementById('waPhone').value.trim(),
+    callmebot_apikey: document.getElementById('waApiKey').value.trim(),
+    alert_losing: document.getElementById('alertLosing').checked,
+    alert_winning: document.getElementById('alertWinning').checked,
+    alert_amazon: document.getElementById('alertAmazon').checked,
+  };
+  try {
+    const r = await fetch(API + '/api/alerts/settings', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(settings) });
+    const d = await r.json();
+    showAlert('alertSettingsMsg', '✅ Alert settings saved successfully!', 'success');
+  } catch(e) {
+    showAlert('alertSettingsMsg', '❌ Failed to save settings', 'error');
+  }
+}
+
+async function testWhatsApp() {
+  showAlert('alertSettingsMsg', '📤 Sending test message...', 'info');
+  try {
+    const r = await fetch(API + '/api/alerts/test', { method:'POST' });
+    const d = await r.json();
+    showAlert('alertSettingsMsg', d.success ? '✅ Test WhatsApp message sent! Check your phone.' : '❌ Failed: ' + (d.message || 'Unknown error'), d.success ? 'success' : 'error');
+  } catch(e) {
+    showAlert('alertSettingsMsg', '❌ Error sending test message. Check your phone number and API key.', 'error');
+  }
+}
+
+async function saveSchedulerSettings() {
+  const settings = {
+    interval_hours: parseFloat(document.getElementById('refreshInterval').value),
+    enabled: document.getElementById('schedulerEnabled').value === 'true',
+  };
+  try {
+    const r = await fetch(API + '/api/scheduler/settings', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(settings) });
+    const d = await r.json();
+    showAlert('schedulerMsg', '✅ ' + d.message, 'success');
+    loadSchedulerStatus();
+  } catch(e) {
+    showAlert('schedulerMsg', '❌ Failed to save scheduler settings', 'error');
+  }
+}
+
+async function runNow() {
+  showAlert('schedulerMsg', '⚡ Triggering refresh of all tracked ASINs...', 'info');
+  try {
+    const r = await fetch(API + '/api/scheduler/run-now', { method:'POST' });
+    const d = await r.json();
+    showAlert('schedulerMsg', '✅ ' + d.message, 'success');
+    setTimeout(() => { loadDashboard(); loadSchedulerStatus(); }, 3000);
+  } catch(e) {
+    showAlert('schedulerMsg', '❌ Failed to trigger refresh', 'error');
+  }
+}
+
+// Update showPage to load settings
+const _origShowPage = showPage;
+function showPage(name) {
+  _origShowPage(name);
+  if (name === 'settings') loadSettings();
 }
 
 // ── Init ──────────────────────────────────────────────────────────

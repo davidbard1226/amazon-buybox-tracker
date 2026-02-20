@@ -19,6 +19,8 @@ from pydantic import BaseModel
 from bs4 import BeautifulSoup
 from loguru import logger
 from database import init_db, get_db, save_asin, save_price_history, get_all_asins, get_price_history, delete_asin, TrackedASIN, PriceHistory
+from alerts import send_whatsapp_alert, load_alert_settings, save_alert_settings
+from scheduler import start_scheduler, stop_scheduler, get_scheduler_status, update_scheduler_interval
 
 # ============================================================================
 # FastAPI App Setup
@@ -358,6 +360,14 @@ def get_amazon_buybox(asin: str, marketplace: str = "amazon.co.za") -> dict:
 def startup_event():
     init_db()
     logger.info("Database initialized on startup")
+    # Start the background scheduler
+    start_scheduler()
+    logger.info("Scheduler started")
+
+@app.on_event("shutdown")
+def shutdown_event():
+    stop_scheduler()
+    logger.info("Scheduler stopped")
 
 # Serve static files (dashboard)
 static_dir = os.path.join(os.path.dirname(__file__), "static")
@@ -480,6 +490,49 @@ def get_stats(db: Session = Depends(get_db)):
         "last_updated": datetime.now().isoformat()
     }
 
+
+@app.get("/api/alerts/settings")
+def get_alert_settings():
+    return load_alert_settings()
+
+@app.post("/api/alerts/settings")
+def update_alert_settings(settings: dict):
+    save_alert_settings(settings)
+    return {"message": "Settings saved", "settings": settings}
+
+@app.post("/api/alerts/test")
+def test_whatsapp():
+    settings = load_alert_settings()
+    phone = settings.get("whatsapp_phone")
+    apikey = settings.get("callmebot_apikey")
+    if not phone or not apikey:
+        raise HTTPException(status_code=400, detail="WhatsApp phone and CallMeBot API key required")
+    success = send_whatsapp_alert(
+        phone=phone,
+        apikey=apikey,
+        message="✅ Test alert from your Amazon Buybox Tracker! Alerts are working correctly."
+    )
+    return {"success": success, "message": "Test alert sent!" if success else "Failed to send alert"}
+
+@app.get("/api/scheduler/status")
+def scheduler_status():
+    return get_scheduler_status()
+
+class SchedulerSettings(BaseModel):
+    interval_hours: float = 6.0
+    enabled: bool = True
+
+@app.post("/api/scheduler/settings")
+def update_scheduler(settings: SchedulerSettings, db: Session = Depends(get_db)):
+    update_scheduler_interval(settings.interval_hours, settings.enabled, db)
+    return {"message": f"Scheduler updated - runs every {settings.interval_hours} hours", "enabled": settings.enabled}
+
+@app.post("/api/scheduler/run-now")
+def run_now(db: Session = Depends(get_db)):
+    """Manually trigger a refresh of all tracked ASINs."""
+    from scheduler import refresh_all_asins
+    refresh_all_asins(db)
+    return {"message": "Manual refresh triggered for all tracked ASINs"}
 
 if __name__ == "__main__":
     import uvicorn

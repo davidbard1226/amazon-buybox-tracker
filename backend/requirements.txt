@@ -11,3 +11,4 @@ loguru>=0.7.2
 aiofiles>=23.2.1
 psycopg2-binary>=2.9.9
 sqlalchemy>=2.0.0
+apscheduler>=3.10.4
