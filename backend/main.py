@@ -5,47 +5,20 @@ Fetches buybox price and seller info for Amazon ASINs
 
 import time
 import random
-import json
 import os
 import re
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import List, Optional, Dict
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
-import os
+from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from bs4 import BeautifulSoup
 from loguru import logger
-
-# ============================================================================
-# Persistence Setup
-# ============================================================================
-
-DATA_FILE = os.path.join(os.path.dirname(__file__), "tracker_data.json")
-
-def load_data():
-    """Load persisted data from disk."""
-    global tracked_asins, price_history
-    if os.path.exists(DATA_FILE):
-        try:
-            with open(DATA_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                tracked_asins.update(data.get("tracked_asins", {}))
-                price_history.update(data.get("price_history", {}))
-            logger.info(f"Loaded {len(tracked_asins)} ASINs from disk")
-        except Exception as e:
-            logger.error(f"Failed to load data: {e}")
-
-def save_data():
-    """Save current data to disk."""
-    try:
-        with open(DATA_FILE, "w", encoding="utf-8") as f:
-            json.dump({"tracked_asins": tracked_asins, "price_history": price_history}, f, indent=2)
-    except Exception as e:
-        logger.error(f"Failed to save data: {e}")
+from database import init_db, get_db, save_asin, save_price_history, get_all_asins, get_price_history, delete_asin, TrackedASIN, PriceHistory
 
 # ============================================================================
 # FastAPI App Setup
@@ -65,18 +38,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ============================================================================
-# In-Memory Store
-# ============================================================================
-
-tracked_asins: Dict[str, dict] = {}
-price_history: Dict[str, List[dict]] = {}
-
-# Your seller name - change this if needed
-MY_SELLER_NAME = "Bonolo Online"
-
-# Amazon seller name variants
-AMAZON_SELLER_NAMES = ["amazon", "amazon.co.za", "amazon.com", "fulfilled by amazon", "sold by amazon"]
+# Your seller name
+MY_SELLER_NAME = os.getenv("MY_SELLER_NAME", "Bonolo Online")
 
 # ============================================================================
 # Models
@@ -393,8 +356,8 @@ def get_amazon_buybox(asin: str, marketplace: str = "amazon.co.za") -> dict:
 
 @app.on_event("startup")
 def startup_event():
-    load_data()
-    logger.info("Data loaded from disk on startup")
+    init_db()
+    logger.info("Database initialized on startup")
 
 # Serve static files (dashboard)
 static_dir = os.path.join(os.path.dirname(__file__), "static")
@@ -403,156 +366,116 @@ if os.path.exists(static_dir):
 
 @app.get("/")
 def serve_dashboard():
-    """Serve the dashboard HTML."""
     index = os.path.join(os.path.dirname(__file__), "static", "dashboard.html")
     return FileResponse(index)
 
 @app.get("/api/health")
-def health():
-    return {"status": "healthy", "timestamp": datetime.now().isoformat(), "tracked_asins": len(tracked_asins)}
+def health(db: Session = Depends(get_db)):
+    count = db.query(TrackedASIN).count()
+    return {"status": "healthy", "timestamp": datetime.now().isoformat(), "tracked_asins": count}
+
+
+def asin_to_dict(a: TrackedASIN) -> dict:
+    return {
+        "asin": a.asin, "title": a.title, "image_url": a.image_url,
+        "marketplace": a.marketplace, "buybox_price": a.buybox_price,
+        "buybox_seller": a.buybox_seller, "buybox_status": a.buybox_status,
+        "currency": a.currency, "rating": a.rating, "review_count": a.review_count,
+        "availability": a.availability, "is_amazon_seller": a.is_amazon_seller,
+        "scraped_at": a.scraped_at.isoformat() if a.scraped_at else None,
+        "url": f"https://www.{a.marketplace}/dp/{a.asin}", "status": "success"
+    }
 
 
 @app.post("/api/buybox/lookup")
-def lookup_buybox(req: ASINRequest):
-    """Fetch live buybox data for a single ASIN."""
+def lookup_buybox(req: ASINRequest, db: Session = Depends(get_db)):
     asin = req.asin.strip().upper()
     if not asin:
         raise HTTPException(status_code=400, detail="ASIN is required")
-
     data = get_amazon_buybox(asin, req.marketplace)
-
-    # Store in memory
-    tracked_asins[asin] = data
-
-    # Record price history
-    if asin not in price_history:
-        price_history[asin] = []
-
-    if data.get("buybox_price"):
-        price_history[asin].append({
-            "timestamp": data["scraped_at"],
-            "price": data["buybox_price"],
-            "seller": data.get("buybox_seller"),
-            "status": data.get("buybox_status"),
-        })
-        # Keep last 100 records
-        price_history[asin] = price_history[asin][-100:]
-
-    # Persist to disk
-    save_data()
-
+    save_asin(db, data)
+    save_price_history(db, data)
     return data
 
 
 @app.post("/api/buybox/bulk")
-def bulk_lookup(req: BulkASINRequest):
-    """Fetch buybox data for multiple ASINs."""
+def bulk_lookup(req: BulkASINRequest, db: Session = Depends(get_db)):
     results = []
     for asin in req.asins:
         asin = asin.strip().upper()
         if asin:
             data = get_amazon_buybox(asin, req.marketplace)
-            tracked_asins[asin] = data
-            if asin not in price_history:
-                price_history[asin] = []
-            if data.get("buybox_price"):
-                price_history[asin].append({
-                    "timestamp": data["scraped_at"],
-                    "price": data["buybox_price"],
-                    "seller": data.get("buybox_seller"),
-                    "status": data.get("buybox_status"),
-                })
-                price_history[asin] = price_history[asin][-100:]
+            save_asin(db, data)
+            save_price_history(db, data)
             results.append(data)
-            time.sleep(random.uniform(2, 4))  # Be polite between requests
-    save_data()
+            time.sleep(random.uniform(2, 4))
     return {"results": results, "count": len(results)}
 
 
 @app.post("/api/buybox/bulk-urls")
-def bulk_url_lookup(req: BulkURLRequest):
-    """Extract ASINs from Amazon URLs and fetch buybox data."""
+def bulk_url_lookup(req: BulkURLRequest, db: Session = Depends(get_db)):
     asin_pattern = re.compile(r"/dp/([A-Z0-9]{10})", re.I)
     asins = []
     for url in req.urls:
         url = url.strip()
         if not url:
             continue
-        # If it's already an ASIN (10 chars alphanumeric)
         if re.match(r'^[A-Z0-9]{10}$', url, re.I):
             asins.append(url.upper())
             continue
-        # Extract from URL
         match = asin_pattern.search(url)
         if match:
             asins.append(match.group(1).upper())
         else:
             logger.warning(f"Could not extract ASIN from: {url}")
-
     results = []
     for asin in asins:
         data = get_amazon_buybox(asin, req.marketplace)
-        tracked_asins[asin] = data
-        if asin not in price_history:
-            price_history[asin] = []
-        if data.get("buybox_price"):
-            price_history[asin].append({
-                "timestamp": data["scraped_at"],
-                "price": data["buybox_price"],
-                "seller": data.get("buybox_seller"),
-                "status": data.get("buybox_status"),
-            })
-            price_history[asin] = price_history[asin][-100:]
+        save_asin(db, data)
+        save_price_history(db, data)
         results.append(data)
         time.sleep(random.uniform(2, 4))
-    save_data()
     return {"results": results, "count": len(results), "asins_found": asins}
 
 
 @app.get("/api/buybox/tracked")
-def get_tracked():
-    """Get all tracked ASINs with their latest data."""
-    return {"asins": list(tracked_asins.values()), "count": len(tracked_asins)}
+def get_tracked(db: Session = Depends(get_db)):
+    asins = get_all_asins(db)
+    return {"asins": [asin_to_dict(a) for a in asins], "count": len(asins)}
 
 
 @app.get("/api/buybox/history/{asin}")
-def get_history(asin: str):
-    """Get price history for a specific ASIN."""
+def get_history(asin: str, db: Session = Depends(get_db)):
     asin = asin.upper()
-    history = price_history.get(asin, [])
+    history = get_price_history(db, asin)
     return {
         "asin": asin,
-        "history": history,
+        "history": [{"timestamp": h.timestamp.isoformat(), "price": h.price, "seller": h.seller, "status": h.status} for h in history],
         "count": len(history)
     }
 
 
 @app.delete("/api/buybox/tracked/{asin}")
-def remove_asin(asin: str):
-    """Remove an ASIN from tracking."""
+def remove_asin(asin: str, db: Session = Depends(get_db)):
     asin = asin.upper()
-    if asin in tracked_asins:
-        del tracked_asins[asin]
-    if asin in price_history:
-        del price_history[asin]
+    delete_asin(db, asin)
     return {"message": f"ASIN {asin} removed from tracking"}
 
 
 @app.get("/api/buybox/stats")
-def get_stats():
-    """Get summary stats for tracked ASINs."""
-    asins = list(tracked_asins.values())
+def get_stats(db: Session = Depends(get_db)):
+    asins = get_all_asins(db)
     total = len(asins)
-    amazon_wins = len([a for a in asins if a.get("is_amazon_seller")])
-    third_party_wins = total - amazon_wins
-
-    prices = [a["buybox_price"] for a in asins if a.get("buybox_price")]
+    winning = len([a for a in asins if a.buybox_status == "winning"])
+    losing = len([a for a in asins if a.buybox_status == "losing"])
+    amazon_wins = len([a for a in asins if a.buybox_status == "amazon"])
+    prices = [a.buybox_price for a in asins if a.buybox_price]
     avg_price = round(sum(prices) / len(prices), 2) if prices else 0
-
     return {
         "total_tracked": total,
+        "winning": winning,
+        "losing": losing,
         "amazon_wins": amazon_wins,
-        "third_party_wins": third_party_wins,
         "avg_buybox_price": avg_price,
         "last_updated": datetime.now().isoformat()
     }
