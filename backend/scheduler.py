@@ -1,19 +1,19 @@
 ﻿"""
-APScheduler - Auto-refresh all tracked ASINs on a schedule
+Auto-refresh scheduler using Python built-in threading - no extra dependencies
 """
 import os
 import json
-from datetime import datetime
+import threading
+from datetime import datetime, timedelta
 from loguru import logger
-from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.triggers.interval import IntervalTrigger
 
 SCHEDULER_FILE = "scheduler_settings.json"
-scheduler = BackgroundScheduler()
-_db_factory = None
+
+_timer = None
 _last_run = None
 _interval_hours = 6.0
 _enabled = True
+_next_run = None
 
 def load_scheduler_settings() -> dict:
     if os.path.exists(SCHEDULER_FILE):
@@ -29,7 +29,7 @@ def save_scheduler_settings(settings: dict):
         json.dump(settings, f, indent=2)
 
 def refresh_all_asins(db=None):
-    global _last_run, _db_factory
+    global _last_run, _next_run, _interval_hours, _enabled, _timer
     logger.info("Scheduler: Starting auto-refresh of all tracked ASINs")
     _last_run = datetime.now().isoformat()
     try:
@@ -56,6 +56,17 @@ def refresh_all_asins(db=None):
         logger.success(f"Scheduler: Refresh complete for {len(asins)} ASINs")
     except Exception as e:
         logger.error(f"Scheduler refresh failed: {e}")
+    # Schedule next run
+    if _enabled:
+        _schedule_next()
+
+def _schedule_next():
+    global _timer, _next_run, _interval_hours
+    _next_run = (datetime.now() + timedelta(hours=_interval_hours)).isoformat()
+    _timer = threading.Timer(_interval_hours * 3600, refresh_all_asins)
+    _timer.daemon = True
+    _timer.start()
+    logger.info(f"Next refresh scheduled for: {_next_run}")
 
 def start_scheduler():
     global _interval_hours, _enabled
@@ -63,56 +74,34 @@ def start_scheduler():
     _interval_hours = settings.get("interval_hours", 6.0)
     _enabled = settings.get("enabled", True)
     if _enabled:
-        scheduler.add_job(
-            refresh_all_asins,
-            trigger=IntervalTrigger(hours=_interval_hours),
-            id="refresh_all",
-            replace_existing=True,
-            name="Auto-refresh all ASINs"
-        )
-        scheduler.start()
+        _schedule_next()
         logger.info(f"Scheduler started - runs every {_interval_hours} hours")
     else:
-        logger.info("Scheduler disabled - not starting")
+        logger.info("Scheduler disabled")
 
 def stop_scheduler():
-    if scheduler.running:
-        scheduler.shutdown(wait=False)
+    global _timer
+    if _timer:
+        _timer.cancel()
         logger.info("Scheduler stopped")
 
 def update_scheduler_interval(interval_hours: float, enabled: bool, db=None):
-    global _interval_hours, _enabled
+    global _interval_hours, _enabled, _timer
     _interval_hours = interval_hours
     _enabled = enabled
     save_scheduler_settings({"interval_hours": interval_hours, "enabled": enabled})
-    if scheduler.running:
-        scheduler.remove_all_jobs()
-        if enabled:
-            scheduler.add_job(
-                refresh_all_asins,
-                trigger=IntervalTrigger(hours=interval_hours),
-                id="refresh_all",
-                replace_existing=True,
-                name="Auto-refresh all ASINs"
-            )
-            logger.info(f"Scheduler updated - every {interval_hours} hours")
-    elif enabled:
-        start_scheduler()
+    if _timer:
+        _timer.cancel()
+    if enabled:
+        _schedule_next()
+        logger.info(f"Scheduler updated - every {interval_hours} hours")
 
 def get_scheduler_status() -> dict:
-    global _last_run, _interval_hours, _enabled
+    global _last_run, _next_run, _interval_hours, _enabled
     settings = load_scheduler_settings()
-    next_run = None
-    try:
-        job = scheduler.get_job("refresh_all")
-        if job and job.next_run_time:
-            next_run = job.next_run_time.isoformat()
-    except Exception:
-        pass
-    from database import SessionLocal
+    from database import SessionLocal, TrackedASIN
     try:
         db = SessionLocal()
-        from database import TrackedASIN
         total = db.query(TrackedASIN).count()
         db.close()
     except Exception:
@@ -120,8 +109,8 @@ def get_scheduler_status() -> dict:
     return {
         "enabled": settings.get("enabled", True),
         "interval_hours": settings.get("interval_hours", 6.0),
-        "running": scheduler.running,
+        "running": _timer is not None and _timer.is_alive(),
         "last_run": _last_run,
-        "next_run": next_run,
+        "next_run": _next_run,
         "total_asins": total,
     }
