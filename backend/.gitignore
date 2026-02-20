@@ -4,3 +4,6 @@ __pycache__/
 .env
 tracker_data.json
 *.log
+*.db
+alert_settings.json
+scheduler_settings.json

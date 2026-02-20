@@ -389,7 +389,13 @@ def serve_dashboard():
 @app.get("/api/health")
 def health(db: Session = Depends(get_db)):
     count = db.query(TrackedASIN).count()
-    return {"status": "healthy", "timestamp": datetime.now().isoformat(), "tracked_asins": count}
+    return {
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "tracked_asins": count,
+        "scheduler_available": SCHEDULER_AVAILABLE,
+        "version": "2.0.0"
+    }
 
 
 def asin_to_dict(a: TrackedASIN) -> dict:
