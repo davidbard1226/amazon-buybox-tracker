@@ -1,1 +1,77 @@
-Tool call argument 'initial_content' pruned from message history.
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Amazon Buybox Tracker</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>🎯 Amazon Buybox Tracker</h1>
+      <p class="version">v1.0.0</p>
+    </header>
+
+    <!-- Tab Navigation -->
+    <div class="tabs">
+      <button class="tab-btn active" data-tab="scrape">Scrape</button>
+      <button class="tab-btn" data-tab="settings">Settings</button>
+    </div>
+
+    <!-- Status Message -->
+    <div id="status" class="status" style="display: none;"></div>
+
+    <!-- Scrape Tab -->
+    <div id="scrapeTab" class="tab-content active">
+      <div class="section">
+        <p class="description">Click the button below to scrape the current Amazon product page.</p>
+        <button id="scrapeBtn" class="btn btn-primary">
+          📊 Scrape This Page
+        </button>
+      </div>
+
+      <div id="scrapeResult" class="result-container" style="display: none;"></div>
+    </div>
+
+    <!-- Settings Tab -->
+    <div id="settingsTab" class="tab-content">
+      <div class="section">
+        <h3>Backend Configuration</h3>
+        <label for="backendUrl">Backend URL</label>
+        <input 
+          type="text" 
+          id="backendUrl" 
+          placeholder="https://your-app.onrender.com"
+          class="input-field"
+        >
+        <p class="hint">Enter your Render.com backend URL</p>
+
+        <label for="mySellerName">Your Seller Name (Optional)</label>
+        <input 
+          type="text" 
+          id="mySellerName" 
+          placeholder="Your Amazon seller name"
+          class="input-field"
+        >
+        <p class="hint">Used to identify when you win the buybox</p>
+
+        <div class="button-group">
+          <button id="saveSettingsBtn" class="btn btn-primary">
+            💾 Save Settings
+          </button>
+          <button id="testConnectionBtn" class="btn btn-secondary">
+            🔌 Test Connection
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <footer>
+      <p>Made with ❤️ for Amazon sellers</p>
+    </footer>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

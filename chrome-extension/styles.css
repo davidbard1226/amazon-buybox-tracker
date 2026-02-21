@@ -1,1 +1,280 @@
-Tool call argument 'initial_content' pruned from message history.
+/* Amazon Buybox Tracker - Extension Styles */
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
+  font-size: 14px;
+  color: #333;
+  background: #f5f5f5;
+  width: 400px;
+  min-height: 500px;
+}
+
+.container {
+  background: white;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+/* Header */
+header {
+  background: linear-gradient(135deg, #FF9900 0%, #FF6600 100%);
+  color: white;
+  padding: 20px;
+  text-align: center;
+}
+
+header h1 {
+  font-size: 18px;
+  margin-bottom: 5px;
+}
+
+.version {
+  font-size: 11px;
+  opacity: 0.9;
+}
+
+/* Tabs */
+.tabs {
+  display: flex;
+  background: #f9f9f9;
+  border-bottom: 1px solid #ddd;
+}
+
+.tab-btn {
+  flex: 1;
+  padding: 12px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  color: #666;
+  transition: all 0.3s;
+}
+
+.tab-btn:hover {
+  background: #f0f0f0;
+}
+
+.tab-btn.active {
+  color: #FF9900;
+  border-bottom: 3px solid #FF9900;
+  background: white;
+}
+
+/* Tab Content */
+.tab-content {
+  display: none;
+  padding: 20px;
+  flex: 1;
+}
+
+.tab-content.active {
+  display: block;
+}
+
+/* Status Messages */
+.status {
+  padding: 12px;
+  margin: 10px 20px;
+  border-radius: 5px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.status.success {
+  background: #d4edda;
+  color: #155724;
+  border: 1px solid #c3e6cb;
+}
+
+.status.error {
+  background: #f8d7da;
+  color: #721c24;
+  border: 1px solid #f5c6cb;
+}
+
+.status.warning {
+  background: #fff3cd;
+  color: #856404;
+  border: 1px solid #ffeeba;
+}
+
+.status.info {
+  background: #d1ecf1;
+  color: #0c5460;
+  border: 1px solid #bee5eb;
+}
+
+/* Sections */
+.section {
+  margin-bottom: 20px;
+}
+
+.section h3 {
+  font-size: 15px;
+  margin-bottom: 15px;
+  color: #333;
+}
+
+.description {
+  color: #666;
+  margin-bottom: 15px;
+  line-height: 1.5;
+}
+
+/* Form Elements */
+label {
+  display: block;
+  font-size: 13px;
+  font-weight: 500;
+  margin-bottom: 5px;
+  color: #555;
+}
+
+.input-field {
+  width: 100%;
+  padding: 10px;
+  border: 1px solid #ddd;
+  border-radius: 5px;
+  font-size: 13px;
+  margin-bottom: 5px;
+  transition: border-color 0.3s;
+}
+
+.input-field:focus {
+  outline: none;
+  border-color: #FF9900;
+}
+
+.hint {
+  font-size: 11px;
+  color: #999;
+  margin-bottom: 15px;
+}
+
+/* Buttons */
+.btn {
+  padding: 10px 20px;
+  border: none;
+  border-radius: 5px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.3s;
+  width: 100%;
+}
+
+.btn-primary {
+  background: #FF9900;
+  color: white;
+}
+
+.btn-primary:hover {
+  background: #e68a00;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(255, 153, 0, 0.3);
+}
+
+.btn-primary:active {
+  transform: translateY(0);
+}
+
+.btn-primary:disabled {
+  background: #ccc;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.btn-secondary {
+  background: #6c757d;
+  color: white;
+  margin-top: 10px;
+}
+
+.btn-secondary:hover {
+  background: #5a6268;
+}
+
+.button-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Result Display */
+.result-container {
+  margin-top: 20px;
+  padding: 15px;
+  background: #f9f9f9;
+  border-radius: 5px;
+  border: 1px solid #ddd;
+}
+
+.result-card {
+  display: flex;
+  gap: 15px;
+}
+
+.result-img {
+  width: 100px;
+  height: 100px;
+  object-fit: contain;
+  border-radius: 5px;
+  border: 1px solid #ddd;
+}
+
+.result-info h3 {
+  font-size: 14px;
+  margin-bottom: 10px;
+  color: #333;
+}
+
+.result-info p {
+  font-size: 12px;
+  margin-bottom: 5px;
+  color: #666;
+}
+
+.result-info strong {
+  color: #333;
+}
+
+/* Status Badges */
+.status-winning {
+  color: #28a745;
+  font-weight: bold;
+}
+
+.status-amazon {
+  color: #FF9900;
+  font-weight: bold;
+}
+
+.status-losing {
+  color: #dc3545;
+  font-weight: bold;
+}
+
+.status-unknown {
+  color: #6c757d;
+  font-weight: bold;
+}
+
+/* Footer */
+footer {
+  padding: 15px;
+  text-align: center;
+  font-size: 11px;
+  color: #999;
+  border-top: 1px solid #ddd;
+  margin-top: auto;
+}
