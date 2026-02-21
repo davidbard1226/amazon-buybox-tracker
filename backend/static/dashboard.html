@@ -491,7 +491,7 @@ async function loadDashboard() {
     updateStats();
     renderTable();
   } catch(e) {
-    showAlert('alertBox', '❌ Cannot connect to backend. Make sure the backend is running on port 8001.', 'error');
+    showAlert('alertBox', '❌ Cannot connect to backend. If running locally, make sure the backend is running on port 8001. If deployed, the server may be starting up — please wait a moment and refresh.', 'error');
   }
 }
 
