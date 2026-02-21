@@ -182,6 +182,88 @@ def parse_price(raw: str) -> float:
         return None
 
 
+def get_offer_listing_data(asin: str, marketplace: str = "amazon.co.za") -> dict:
+    """
+    Scrape the 'All Buying Options' page when main page doesn't show seller.
+    URL: https://www.amazon.co.za/gp/offer-listing/ASIN
+    """
+    url = f"https://www.{marketplace}/gp/offer-listing/{asin}"
+    headers = random.choice(HEADERS_LIST)
+    
+    logger.info(f"Fetching offer-listing page for ASIN: {asin}")
+    
+    try:
+        time.sleep(random.uniform(2, 4))  # Slightly longer delay for secondary page
+        response = requests.get(url, headers=headers, timeout=15)
+        
+        if response.status_code != 200:
+            logger.warning(f"Offer-listing page returned {response.status_code} for {asin}")
+            return None
+        
+        soup = BeautifulSoup(response.content, "lxml")
+        
+        # Find the first offer (usually the buybox winner or lowest price)
+        offer_divs = soup.find_all("div", {"class": "a-row a-spacing-mini olpOffer"})
+        
+        if not offer_divs:
+            logger.warning(f"No offers found on offer-listing page for {asin}")
+            return None
+        
+        # Get the first (best) offer
+        first_offer = offer_divs[0]
+        
+        # Extract price
+        price = None
+        price_span = first_offer.find("span", {"class": "a-price"})
+        if price_span:
+            price_whole = price_span.find("span", {"class": "a-price-whole"})
+            price_fraction = price_span.find("span", {"class": "a-price-fraction"})
+            if price_whole:
+                whole_text = price_whole.get_text(strip=True).replace(",", "").replace(" ", "").replace("R", "").strip()
+                frac_text = price_fraction.get_text(strip=True).strip() if price_fraction else "00"
+                try:
+                    price = float(f"{whole_text}.{frac_text}")
+                except Exception:
+                    pass
+        
+        # If still no price, try offscreen price
+        if not price:
+            offscreen = first_offer.find("span", {"class": "a-offscreen"})
+            if offscreen:
+                price = parse_price(offscreen.get_text(strip=True))
+        
+        # Extract seller name
+        seller = None
+        seller_link = first_offer.find("a", {"aria-label": lambda x: x and "seller" in x.lower()})
+        if not seller_link:
+            seller_link = first_offer.find("h3", {"class": "a-spacing-none olpSellerName"})
+            if seller_link:
+                seller_link = seller_link.find("a") or seller_link.find("span")
+        
+        if seller_link:
+            seller_text = seller_link.get_text(strip=True)
+            if re.search(r'amazon', seller_text, re.I):
+                seller = "Amazon.co.za"
+            else:
+                seller = seller_text
+        
+        # Check if it's Amazon from other indicators
+        if not seller:
+            offer_text = first_offer.get_text(" ", strip=True)
+            if re.search(r'amazon|ships from amazon|sold by amazon', offer_text, re.I):
+                seller = "Amazon.co.za"
+        
+        if price and seller:
+            logger.success(f"✅ Found from offer-listing: Price={price}, Seller={seller}")
+            return {"price": price, "seller": seller}
+        
+        return None
+        
+    except Exception as e:
+        logger.error(f"Error scraping offer-listing for {asin}: {e}")
+        return None
+
+
 def get_amazon_buybox(asin: str, marketplace: str = "amazon.co.za") -> dict:
     """Scrape Amazon product page for buybox info."""
 
@@ -384,6 +466,19 @@ def get_amazon_buybox(asin: str, marketplace: str = "amazon.co.za") -> dict:
         if not seller:
             if re.search(r'(sent from and sold by|sold and fulfilled by|ships from and sold by)\s*amazon', page_text, re.I):
                 seller = "Amazon.co.za"
+
+        # --- FALLBACK: If no seller/price found, try offer-listing page ---
+        if not seller or not price:
+            logger.info(f"Main page missing data for {asin}, trying offer-listing page...")
+            offer_data = get_offer_listing_data(asin, marketplace)
+            if offer_data:
+                if not price and offer_data.get("price"):
+                    price = offer_data["price"]
+                    result["buybox_price"] = price
+                    logger.info(f"✅ Got price from offer-listing: {price}")
+                if not seller and offer_data.get("seller"):
+                    seller = offer_data["seller"]
+                    logger.info(f"✅ Got seller from offer-listing: {seller}")
 
         # --- Determine buybox status ---
         seller_lower = (seller or "").lower().strip()
