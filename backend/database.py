@@ -71,6 +71,10 @@ class TrackedASIN(Base):
     scraped_at = Column(DateTime, default=datetime.utcnow)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    # My seller data (imported from Excel)
+    sku = Column(String(255), nullable=True)
+    my_price = Column(Float, nullable=True)
+    my_stock = Column(Integer, nullable=True)
 
 
 class PriceHistory(Base):

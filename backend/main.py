@@ -7,16 +7,19 @@ import time
 import random
 import os
 import re
+import io
+import csv
 import requests
 import threading
 import uuid
 from datetime import datetime
 from typing import List, Optional, Dict
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 from pydantic import BaseModel
 from bs4 import BeautifulSoup
 from loguru import logger
@@ -587,6 +590,8 @@ def startup_event():
     try:
         init_db()
         logger.info("Database initialized on startup")
+        # Migrate existing tables: add new columns if they don't exist
+        _migrate_db()
     except Exception as e:
         logger.error(f"Startup DB init error (app will still start): {e}")
     if SCHEDULER_AVAILABLE:
@@ -595,6 +600,22 @@ def startup_event():
             logger.info("Scheduler started")
         except Exception as e:
             logger.error(f"Scheduler failed to start: {e}")
+
+
+def _migrate_db():
+    """Add new columns to existing tables without dropping data."""
+    try:
+        with engine.connect() as conn:
+            # Check and add sku, my_price, my_stock columns
+            for col, col_type in [("sku", "VARCHAR(255)"), ("my_price", "FLOAT"), ("my_stock", "INTEGER")]:
+                try:
+                    conn.execute(text(f"ALTER TABLE tracked_asins ADD COLUMN {col} {col_type}"))
+                    conn.commit()
+                    logger.info(f"✅ Migration: added column '{col}' to tracked_asins")
+                except Exception:
+                    pass  # Column already exists — safe to ignore
+    except Exception as e:
+        logger.warning(f"Migration skipped: {e}")
 
 @app.on_event("shutdown")
 def shutdown_event():
@@ -645,7 +666,9 @@ def asin_to_dict(a: TrackedASIN) -> dict:
         "currency": a.currency, "rating": a.rating, "review_count": a.review_count,
         "availability": a.availability, "is_amazon_seller": a.is_amazon_seller,
         "scraped_at": a.scraped_at.isoformat() if a.scraped_at else None,
-        "url": f"https://www.{a.marketplace}/dp/{a.asin}", "status": "success"
+        "url": f"https://www.{a.marketplace}/dp/{a.asin}", "status": "success",
+        # My seller data
+        "sku": a.sku, "my_price": a.my_price, "my_stock": a.my_stock,
     }
 
 
@@ -857,6 +880,111 @@ def extension_scrape(data: dict):
     except Exception as e:
         logger.error(f"Extension scrape error: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to save extension data: {str(e)}")
+
+
+@app.post("/api/import/excel")
+async def import_excel(file: UploadFile = File(...), db: Session = Depends(get_db)):
+    """
+    Import ASIN, SKU, My Price, Stock from Excel (.xlsx) or CSV (.csv).
+    Expected columns (case-insensitive, flexible names):
+      ASIN | SKU | My Price / Price | Stock / Qty / Quantity
+    """
+    try:
+        content = await file.read()
+        filename = (file.filename or "").lower()
+        rows = []
+
+        if filename.endswith(".csv"):
+            # Parse CSV
+            text_content = content.decode("utf-8-sig", errors="replace")
+            reader = csv.DictReader(io.StringIO(text_content))
+            rows = list(reader)
+        elif filename.endswith(".xlsx") or filename.endswith(".xls"):
+            # Parse Excel using openpyxl
+            try:
+                import openpyxl
+            except ImportError:
+                raise HTTPException(status_code=500, detail="openpyxl not installed. Use CSV format instead.")
+            wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+            ws = wb.active
+            headers = []
+            for i, row in enumerate(ws.iter_rows(values_only=True)):
+                if i == 0:
+                    headers = [str(c).strip() if c else "" for c in row]
+                else:
+                    rows.append(dict(zip(headers, [str(c).strip() if c is not None else "" for c in row])))
+        else:
+            raise HTTPException(status_code=400, detail="Only .xlsx, .xls, or .csv files are supported")
+
+        # Flexible column name matching
+        def find_col(row, *names):
+            for k in row:
+                if k.lower().replace(" ", "").replace("_", "") in [n.lower().replace(" ", "").replace("_", "") for n in names]:
+                    return row[k].strip() if row[k] else None
+            return None
+
+        updated = []
+        skipped = []
+        asin_re = re.compile(r'^[A-Z0-9]{10}$')
+
+        for row in rows:
+            asin = (find_col(row, "ASIN", "asin") or "").upper().strip()
+            if not asin or not asin_re.match(asin):
+                skipped.append({"row": str(row), "reason": "Invalid or missing ASIN"})
+                continue
+
+            sku = find_col(row, "SKU", "sku", "Seller SKU", "SellerSKU")
+            my_price_raw = find_col(row, "My Price", "MyPrice", "Price", "my_price", "YourPrice")
+            stock_raw = find_col(row, "Stock", "Qty", "Quantity", "stock", "StockLevel", "AvailableQty")
+
+            my_price = None
+            if my_price_raw:
+                try:
+                    my_price = float(re.sub(r'[^\d.]', '', my_price_raw))
+                except Exception:
+                    pass
+
+            my_stock = None
+            if stock_raw:
+                try:
+                    my_stock = int(re.sub(r'[^\d]', '', stock_raw))
+                except Exception:
+                    pass
+
+            # Upsert into DB
+            existing = db.query(TrackedASIN).filter(TrackedASIN.asin == asin).first()
+            if existing:
+                if sku is not None: existing.sku = sku
+                if my_price is not None: existing.my_price = my_price
+                if my_stock is not None: existing.my_stock = my_stock
+                existing.updated_at = datetime.utcnow()
+            else:
+                # Create placeholder record — will be scraped on next extension pass
+                new_rec = TrackedASIN(
+                    asin=asin, sku=sku, my_price=my_price, my_stock=my_stock,
+                    marketplace="amazon.co.za", buybox_status="unknown",
+                    title=f"Pending scrape... ({asin})", scraped_at=None,
+                )
+                db.add(new_rec)
+
+            updated.append({"asin": asin, "sku": sku, "my_price": my_price, "my_stock": my_stock})
+
+        db.commit()
+        logger.info(f"Excel import: {len(updated)} updated, {len(skipped)} skipped")
+        return {
+            "success": True,
+            "updated": len(updated),
+            "skipped": len(skipped),
+            "records": updated,
+            "skipped_records": skipped,
+            "message": f"✅ {len(updated)} ASINs imported successfully"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Excel import error: {e}")
+        raise HTTPException(status_code=500, detail=f"Import failed: {str(e)}")
 
 
 @app.get("/api/extension/config")

@@ -156,6 +156,9 @@ tr:hover td{background:rgba(255,255,255,0.02);}
             <th></th>
             <th onclick="sortTable('title')" style="cursor:pointer;">Product ↕</th>
             <th onclick="sortTable('asin')" style="cursor:pointer;">ASIN ↕</th>
+            <th onclick="sortTable('sku')" style="cursor:pointer;">SKU ↕</th>
+            <th onclick="sortTable('my_price')" style="cursor:pointer;">My Price ↕</th>
+            <th onclick="sortTable('my_stock')" style="cursor:pointer;">Stock ↕</th>
             <th onclick="sortTable('buybox_price')" style="cursor:pointer;">Buybox Price ↕</th>
             <th onclick="sortTable('buybox_seller')" style="cursor:pointer;">Buybox Seller ↕</th>
             <th>Status</th>
@@ -212,9 +215,34 @@ tr:hover td{background:rgba(255,255,255,0.02);}
 
 <!-- BULK PAGE -->
 <div id="page-bulk" class="page">
+
+  <!-- Excel Import Card -->
   <div class="card">
-    <h2>📋 Bulk ASIN / URL Upload</h2>
-    <p style="color:#94a3b8;font-size:0.85rem;margin-bottom:16px;">Paste one ASIN or Amazon URL per line. Mix of both is supported.</p>
+    <h2>📥 Import from Excel / CSV</h2>
+    <p style="color:#94a3b8;font-size:0.9rem;margin-bottom:16px;">Upload your Excel or CSV file with ASIN, SKU, My Price and Stock Level. New ASINs will be added; existing ones will have their SKU/Price/Stock updated.</p>
+    <div style="background:#1a2e44;border:1px solid #2563eb;border-radius:8px;padding:14px;margin-bottom:18px;font-size:0.9rem;color:#93c5fd;">
+      <b>📋 Required columns (any order, flexible naming):</b><br><br>
+      <code style="background:#0f172a;padding:3px 8px;border-radius:4px;">ASIN</code> &nbsp;
+      <code style="background:#0f172a;padding:3px 8px;border-radius:4px;">SKU</code> &nbsp;
+      <code style="background:#0f172a;padding:3px 8px;border-radius:4px;">My Price</code> or <code style="background:#0f172a;padding:3px 8px;border-radius:4px;">Price</code> &nbsp;
+      <code style="background:#0f172a;padding:3px 8px;border-radius:4px;">Stock</code> or <code style="background:#0f172a;padding:3px 8px;border-radius:4px;">Qty</code><br><br>
+      Supports <b>.xlsx</b>, <b>.xls</b> and <b>.csv</b> files. Example row:<br>
+      <code style="background:#0f172a;padding:3px 8px;border-radius:4px;display:inline-block;margin-top:6px;">B01ARGZ8N0 | SKU-CANON-001 | 1599.00 | 25</code>
+    </div>
+    <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;">
+      <input type="file" id="excelFile" accept=".xlsx,.xls,.csv"
+        style="background:#0f172a;border:1px solid #334155;color:#e2e8f0;padding:10px;border-radius:8px;font-size:0.9rem;flex:1;min-width:200px;"/>
+      <button class="btn btn-primary" onclick="importExcel()">📤 Import File</button>
+      <a href="#" onclick="downloadTemplate()" style="color:#f97316;font-size:0.85rem;text-decoration:none;">⬇️ Download Template</a>
+    </div>
+    <div id="importAlert" style="margin-top:12px;"></div>
+    <div id="importResult" style="margin-top:12px;"></div>
+  </div>
+
+  <!-- Bulk Scrape Card -->
+  <div class="card">
+    <h2>📋 Bulk ASIN / URL Scrape</h2>
+    <p style="color:#94a3b8;font-size:0.85rem;margin-bottom:16px;">Paste one ASIN or Amazon URL per line. Chrome Extension will open each in a tab and scrape buybox data automatically.</p>
     <div class="form-group" style="margin-bottom:12px;">
       <label>Marketplace</label>
       <select id="bulkMarket" style="width:200px;">
@@ -229,7 +257,7 @@ tr:hover td{background:rgba(255,255,255,0.02);}
     </div>
     <textarea id="bulkInput" placeholder="B01ARH3Q5G&#10;B01ARH7R7Y&#10;https://www.amazon.co.za/dp/B09XYZ1234&#10;..."></textarea>
     <div style="display:flex;gap:12px;margin-top:12px;">
-      <button class="btn btn-primary" id="bulkBtn" onclick="submitBulk()">🚀 Fetch All</button>
+      <button class="btn btn-primary" id="bulkBtn" onclick="submitBulk()">🚀 Fetch All via Extension</button>
       <button class="btn btn-sm" style="background:#334155;color:#e2e8f0;" onclick="document.getElementById('bulkInput').value=''">🗑 Clear</button>
     </div>
     <div id="bulkAlert" style="margin-top:12px;"></div>
@@ -522,27 +550,38 @@ function renderTable() {
     return;
   }
 
-  tbody.innerHTML = data.map(p => `
+  tbody.innerHTML = data.map(p => {
+    const priceDiff = (p.my_price && p.buybox_price) ? p.buybox_price - p.my_price : null;
+    const priceDiffHtml = priceDiff !== null
+      ? `<div style="font-size:0.7rem;margin-top:2px;color:${priceDiff > 0 ? '#10b981' : priceDiff < 0 ? '#ef4444' : '#94a3b8'};">${priceDiff > 0 ? '▲ Buybox higher' : priceDiff < 0 ? '▼ Buybox lower' : '= Same price'}</div>`
+      : '';
+    const stockHtml = p.my_stock !== null && p.my_stock !== undefined
+      ? `<span style="color:${p.my_stock > 10 ? '#10b981' : p.my_stock > 0 ? '#f59e0b' : '#ef4444'};font-weight:600;">${p.my_stock}</span>`
+      : '<span style="color:#475569">—</span>';
+    return `
     <tr>
       <td>${fmtImg(p.image_url)}</td>
-      <td style="max-width:260px;">
+      <td style="max-width:220px;">
         <div style="font-weight:500;font-size:0.85rem;line-height:1.4;">${p.title || '—'}</div>
         <a href="${p.url}" target="_blank" style="font-size:0.75rem;color:#f97316;">View on Amazon ↗</a>
       </td>
       <td><span class="asin-code">${p.asin}</span></td>
+      <td><span style="font-family:monospace;font-size:0.8rem;color:#94a3b8;">${p.sku || '—'}</span></td>
+      <td>${p.my_price ? `<span class="price-val" style="color:#34d399;">${CURRENCY[p.marketplace]||'R'}${Number(p.my_price).toLocaleString('en-ZA',{minimumFractionDigits:2})}</span>${priceDiffHtml}` : '<span style="color:#475569">—</span>'}</td>
+      <td>${stockHtml}</td>
       <td>${fmtPrice(p.buybox_price, p.marketplace)}</td>
       <td>${fmtSeller(p.buybox_seller, p.buybox_status)}</td>
       <td>${fmtStatus(p.buybox_status)}</td>
       <td style="font-size:0.8rem;color:#94a3b8;">${fmtTime(p.scraped_at)}</td>
       <td>
         <div style="display:flex;gap:6px;">
-          <button class="btn btn-primary btn-sm" onclick="quickRefresh('${p.asin}','${p.marketplace}')">🔄</button>
-          <button class="btn btn-sm" style="background:#334155;color:#e2e8f0;" onclick="viewHistory('${p.asin}')">📈</button>
-          <button class="btn btn-danger btn-sm" onclick="removeASIN('${p.asin}')">🗑</button>
+          <button class="btn btn-primary btn-sm" title="Refresh via Extension" onclick="quickRefresh('${p.asin}','${p.marketplace}')">🔄</button>
+          <button class="btn btn-sm" style="background:#334155;color:#e2e8f0;" title="View Price History" onclick="viewHistory('${p.asin}')">📈</button>
+          <button class="btn btn-danger btn-sm" title="Remove" onclick="removeASIN('${p.asin}')">🗑</button>
         </div>
       </td>
-    </tr>
-  `).join('');
+    </tr>`;
+  }).join('');
 }
 
 // ── Refresh via Extension (open tab, auto-scrape, close) ─────────
@@ -918,6 +957,68 @@ function _startBulkExtensionPoll(asins, oldScrapedAts, btn) {
       }
     } catch(e) {}
   }, 4000);
+}
+
+// ── Excel Import ──────────────────────────────────────────────────
+async function importExcel() {
+  const fileInput = document.getElementById('excelFile');
+  const file = fileInput.files[0];
+  if (!file) { showAlert('importAlert', '⚠️ Please select an Excel or CSV file first', 'error'); return; }
+
+  const formData = new FormData();
+  formData.append('file', file);
+
+  showAlert('importAlert', `<span class="loading"></span>Importing <b>${file.name}</b>...`, 'info');
+  document.getElementById('importResult').innerHTML = '';
+
+  try {
+    const r = await fetch(API + '/api/import/excel', { method: 'POST', body: formData });
+    const d = await r.json();
+
+    if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
+
+    showAlert('importAlert', `✅ ${d.message} — ${d.skipped} rows skipped`, 'success');
+
+    // Show results table
+    if (d.records && d.records.length > 0) {
+      document.getElementById('importResult').innerHTML = `
+        <div style="margin-top:12px;">
+          <table style="width:100%;font-size:0.82rem;border-collapse:collapse;">
+            <thead><tr style="background:#0f172a;">
+              <th style="padding:8px;text-align:left;color:#94a3b8;">ASIN</th>
+              <th style="padding:8px;text-align:left;color:#94a3b8;">SKU</th>
+              <th style="padding:8px;text-align:left;color:#94a3b8;">My Price</th>
+              <th style="padding:8px;text-align:left;color:#94a3b8;">Stock</th>
+            </tr></thead>
+            <tbody>${d.records.map(r => `
+              <tr style="border-bottom:1px solid #1e293b;">
+                <td style="padding:8px;font-family:monospace;color:#94a3b8;">${r.asin}</td>
+                <td style="padding:8px;color:#e2e8f0;">${r.sku || '—'}</td>
+                <td style="padding:8px;color:#34d399;">${r.my_price ? 'R' + Number(r.my_price).toLocaleString('en-ZA', {minimumFractionDigits:2}) : '—'}</td>
+                <td style="padding:8px;color:${r.my_stock > 10 ? '#10b981' : r.my_stock > 0 ? '#f59e0b' : '#ef4444'};">${r.my_stock !== null && r.my_stock !== undefined ? r.my_stock : '—'}</td>
+              </tr>`).join('')}
+            </tbody>
+          </table>
+        </div>`;
+    }
+
+    // Reload dashboard to show updated data
+    await loadDashboard();
+    fileInput.value = '';
+  } catch(e) {
+    showAlert('importAlert', `❌ Import failed: ${e.message}`, 'error');
+  }
+}
+
+function downloadTemplate() {
+  // Generate a CSV template for download
+  const csv = 'ASIN,SKU,My Price,Stock\nB01ARGZ8N0,SKU-CANON-001,1599.00,25\nB09V1WCCY2,SKU-HP-002,4999.00,10\n';
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'buybox-import-template.csv';
+  a.click(); URL.revokeObjectURL(url);
+  return false;
 }
 
 // ── Analytics ─────────────────────────────────────────────────────
