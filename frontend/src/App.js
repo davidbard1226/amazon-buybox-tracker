@@ -48,7 +48,7 @@ const StatCard = ({ icon: Icon, label, value, sub, color }) => (
 
 // ── main App ──────────────────────────────────────────────────────────────────
 export default function App() {
-  const [asin, setAsin] = useState('B01ARH3Q5G');
+  const [asin, setAsin] = useState('');
   const [marketplace, setMarketplace] = useState('amazon.co.uk');
   const [loading, setLoading] = useState(false);
   const [tracked, setTracked] = useState([]);
@@ -58,6 +58,13 @@ export default function App() {
   const [error, setError] = useState('');
   const [lastUpdated, setLastUpdated] = useState(null);
   const [activeTab, setActiveTab] = useState('tracker');
+
+  // Bulk add state
+  const [bulkText, setBulkText] = useState('');
+  const [bulkLoading, setBulkLoading] = useState(false);
+  const [bulkError, setBulkError] = useState('');
+  const [bulkJob, setBulkJob] = useState(null); // { job_id, total, done, status, results, failed }
+  const bulkPollRef = React.useRef(null);
 
   const loadTracked = useCallback(async () => {
     try {
@@ -133,6 +140,63 @@ export default function App() {
   };
 
   const handleKey = (e) => { if (e.key === 'Enter') lookup(); };
+
+  // ── Bulk scrape handlers ────────────────────────────────────────────────────
+  const parseBulkInput = (text) => {
+    const asinPattern = /\b([A-Z0-9]{10})\b/gi;
+    const found = new Set();
+    for (const match of text.matchAll(asinPattern)) {
+      found.add(match[1].toUpperCase());
+    }
+    return [...found];
+  };
+
+  const stopBulkPoll = () => {
+    if (bulkPollRef.current) {
+      clearInterval(bulkPollRef.current);
+      bulkPollRef.current = null;
+    }
+  };
+
+  const startBulkPoll = (jobId) => {
+    stopBulkPoll();
+    bulkPollRef.current = setInterval(async () => {
+      try {
+        const r = await axios.get(`${API}/buybox/bulk-status/${jobId}`);
+        setBulkJob(r.data);
+        if (r.data.status === 'done') {
+          stopBulkPoll();
+          setBulkLoading(false);
+          loadTracked();
+        }
+      } catch (e) {
+        setBulkError('Lost connection to job. Check backend logs.');
+        stopBulkPoll();
+        setBulkLoading(false);
+      }
+    }, 3000);
+  };
+
+  const startBulkScrape = async () => {
+    const asins = parseBulkInput(bulkText);
+    if (asins.length === 0) {
+      setBulkError('No valid ASINs found. ASINs are 10-character alphanumeric codes.');
+      return;
+    }
+    setBulkError('');
+    setBulkLoading(true);
+    setBulkJob(null);
+    try {
+      const r = await axios.post(`${API}/buybox/bulk-start`, { asins, marketplace });
+      setBulkJob(r.data);
+      startBulkPoll(r.data.job_id);
+    } catch (e) {
+      setBulkError(e.response?.data?.detail || 'Failed to start bulk job. Is the backend running?');
+      setBulkLoading(false);
+    }
+  };
+
+  React.useEffect(() => () => stopBulkPoll(), []);
 
   // chart data
   const chartData = history.map(h => ({
@@ -248,6 +312,109 @@ export default function App() {
               display: 'flex', alignItems: 'center', gap: 8
             }}>
               <AlertCircle size={14} /> {error}
+            </div>
+          )}
+        </div>
+
+        {/* Bulk Add Panel */}
+        <div style={{
+          background: '#1e293b', border: '1px solid #334155', borderRadius: 16,
+          padding: '20px 24px', marginBottom: 24
+        }}>
+          <div style={{ fontSize: 13, color: '#94a3b8', marginBottom: 12, fontWeight: 600 }}>
+            📋 Bulk Add ASINs — paste a list (one per line, or mixed text)
+          </div>
+          <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+            <textarea
+              value={bulkText}
+              onChange={e => setBulkText(e.target.value)}
+              placeholder={'B0FMY71JNP\nB0C6DKW6KX\nB08ZNRFQBM\n...'}
+              rows={5}
+              style={{
+                flex: 3, minWidth: 260, padding: '12px 16px', borderRadius: 10,
+                border: '1px solid #334155', background: '#0f172a', color: '#f1f5f9',
+                fontSize: 13, fontFamily: 'monospace', outline: 'none', resize: 'vertical'
+              }}
+            />
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, flex: 1, minWidth: 180 }}>
+              <div style={{ fontSize: 12, color: '#64748b' }}>
+                {parseBulkInput(bulkText).length > 0
+                  ? `✅ ${parseBulkInput(bulkText).length} valid ASINs detected`
+                  : 'Paste ASINs above'}
+              </div>
+              <button
+                onClick={startBulkScrape}
+                disabled={bulkLoading || parseBulkInput(bulkText).length === 0}
+                style={{
+                  padding: '12px 20px', borderRadius: 10, border: 'none',
+                  cursor: (bulkLoading || parseBulkInput(bulkText).length === 0) ? 'not-allowed' : 'pointer',
+                  background: (bulkLoading || parseBulkInput(bulkText).length === 0)
+                    ? '#334155'
+                    : 'linear-gradient(135deg,#6366f1,#8b5cf6)',
+                  color: '#fff', fontWeight: 700, fontSize: 14,
+                  display: 'flex', alignItems: 'center', gap: 8
+                }}
+              >
+                {bulkLoading
+                  ? <><RefreshCw size={15} style={{ animation: 'spin 1s linear infinite' }} /> Scraping...</>
+                  : <><Plus size={15} /> Start Bulk Scrape</>}
+              </button>
+              {bulkJob && (
+                <button
+                  onClick={() => { setBulkJob(null); setBulkText(''); stopBulkPoll(); setBulkLoading(false); }}
+                  style={{
+                    padding: '8px 14px', borderRadius: 10, border: '1px solid #334155',
+                    background: 'transparent', color: '#94a3b8', fontSize: 12, cursor: 'pointer'
+                  }}
+                >Clear</button>
+              )}
+            </div>
+          </div>
+
+          {bulkError && (
+            <div style={{
+              marginTop: 12, background: '#ef444422', border: '1px solid #ef444444',
+              borderRadius: 8, padding: '10px 14px', color: '#ef4444', fontSize: 13,
+              display: 'flex', alignItems: 'center', gap: 8
+            }}>
+              <AlertCircle size={14} /> {bulkError}
+            </div>
+          )}
+
+          {/* Progress bar */}
+          {bulkJob && (
+            <div style={{ marginTop: 16 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#94a3b8', marginBottom: 6 }}>
+                <span>
+                  {bulkJob.status === 'done' ? '✅ Complete' : '⏳ Scraping...'}
+                  &nbsp;{bulkJob.done}/{bulkJob.total} ASINs
+                  {bulkJob.failed?.length > 0 && <span style={{ color: '#ef4444', marginLeft: 8 }}>· {bulkJob.failed.length} failed</span>}
+                </span>
+                <span style={{ color: bulkJob.status === 'done' ? '#10b981' : '#f59e0b' }}>
+                  {Math.round((bulkJob.done / bulkJob.total) * 100)}%
+                </span>
+              </div>
+              <div style={{ height: 8, background: '#0f172a', borderRadius: 4, overflow: 'hidden' }}>
+                <div style={{
+                  height: '100%',
+                  width: `${Math.round((bulkJob.done / bulkJob.total) * 100)}%`,
+                  background: bulkJob.status === 'done'
+                    ? 'linear-gradient(90deg,#10b981,#06d6a0)'
+                    : 'linear-gradient(90deg,#6366f1,#f59e0b)',
+                  borderRadius: 4,
+                  transition: 'width 0.5s ease'
+                }} />
+              </div>
+              {bulkJob.status === 'done' && bulkJob.failed?.length > 0 && (
+                <div style={{ marginTop: 10, background: '#ef444411', border: '1px solid #ef444433', borderRadius: 8, padding: '8px 12px' }}>
+                  <div style={{ fontSize: 12, color: '#ef4444', fontWeight: 600, marginBottom: 4 }}>Failed ASINs:</div>
+                  {bulkJob.failed.map(f => (
+                    <div key={f.asin} style={{ fontSize: 11, color: '#94a3b8' }}>
+                      <span style={{ color: '#f59e0b' }}>{f.asin}</span> — {f.error}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </div>

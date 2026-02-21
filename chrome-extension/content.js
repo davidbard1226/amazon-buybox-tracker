@@ -1,38 +1,157 @@
-// Amazon Buybox Tracker - Content Script
-// This script runs directly on Amazon product pages and extracts buybox data from the DOM
-// 0% bot detection because it's running in your real browser session!
+// Amazon Buybox Tracker - Content Script v1.1.0
+// Runs in your real browser - 0% bot detection!
 
-console.log('🚀 Amazon Buybox Tracker Extension Loaded');
+console.log('🚀 Amazon Buybox Tracker Extension Loaded v1.1.0');
+
+// ── Auto-scrape when opened via dashboard refresh (auto_scrape=1) ──
+(function checkAutoScrape() {
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('auto_scrape') !== '1') return;
+
+  // Wait for page to fully load before scraping
+  const runAutoScrape = () => {
+    chrome.storage.sync.get(['mySellerName', 'backendUrl'], async (items) => {
+      const mySellerName = items.mySellerName || '';
+      const backendUrl = (items.backendUrl || '').replace(/\/+$/, '');
+      if (!backendUrl) return; // No backend configured, skip
+
+      try {
+        // Try fast scrape first
+        let data = scrapeProductPage(mySellerName);
+
+        // If seller unknown, click AOD and wait
+        if (!data.seller || data.seller === 'Unknown') {
+          const clicked = await clickSeeAllBuyingOptions();
+          if (clicked) {
+            await new Promise(r => setTimeout(r, 2500));
+            data = scrapeProductPage(mySellerName);
+          }
+        }
+
+        // Push to backend
+        await fetch(backendUrl + '/api/extension/scrape', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data)
+        });
+
+        console.log('✅ Auto-scrape complete for', data.asin, '— closing tab');
+        // Close this tab after successful scrape
+        window.close();
+      } catch (e) {
+        console.error('❌ Auto-scrape error:', e);
+        window.close();
+      }
+    });
+  };
+
+  if (document.readyState === 'complete') {
+    setTimeout(runAutoScrape, 1500); // Give AOD time to load
+  } else {
+    window.addEventListener('load', () => setTimeout(runAutoScrape, 1500));
+  }
+})();
 
 // Listen for messages from popup
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'scrapeProduct') {
     console.log('📊 Starting product scrape...');
-    const data = scrapeProductPage();
-    sendResponse({ success: true, data: data });
+    chrome.storage.sync.get(['mySellerName'], async (items) => {
+      const mySellerName = items.mySellerName || '';
+      // First try scraping without AOD panel
+      let data = scrapeProductPage(mySellerName);
+
+      // If seller unknown, try clicking "See All Buying Options" to open AOD panel
+      if (data.seller === 'Unknown') {
+        console.log('🔍 Seller unknown - trying to open AOD panel...');
+        const opened = await openAODPanel();
+        if (opened) {
+          // Wait for panel to render then re-scrape
+          await sleep(1500);
+          data = scrapeProductPage(mySellerName);
+          console.log('📊 After AOD panel:', data.seller);
+        }
+      }
+
+      sendResponse({ success: true, data: data });
+    });
+    return true;
   }
-  return true; // Keep channel open for async response
+  return true;
 });
 
-// Main scraping function - extracts all buybox data from the current page
-function scrapeProductPage() {
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// Click "See All Buying Options" button to open the AOD panel
+async function openAODPanel() {
+  // All known selectors for the "See All Buying Options" / "New offers" button
+  const btnSelectors = [
+    '#aod-ingress-link',
+    'a[data-csa-c-slot-id="aod-ingress-link"]',
+    '#buybox a[href*="offer-listing"]',
+    '#buybox-see-all-buying-choices',
+    'a[href*="offer-listing"]',
+    '#moreBuyingChoices_feature_div a',
+    '#olp_feature_div a',
+    '.a-declarative[data-action="a-modal"] a',
+    '#aod-ingress',
+    '[data-action="show-all-offers-display"] a',
+    'a[href*="aod=1"]',
+  ];
+
+  for (const sel of btnSelectors) {
+    const btn = document.querySelector(sel);
+    if (btn) {
+      console.log('✅ Found AOD trigger:', sel);
+      btn.click();
+      return true;
+    }
+  }
+
+  // Try finding by text content
+  const allLinks = document.querySelectorAll('a, button, span[role="button"]');
+  for (const el of allLinks) {
+    const t = el.textContent.trim();
+    if (/see all buying options|new offers|all offers|buying options/i.test(t)) {
+      console.log('✅ Found AOD trigger by text:', t);
+      el.click();
+      return true;
+    }
+  }
+
+  console.log('⚠️ No AOD trigger button found');
+  return false;
+}
+
+// Main scraping function
+function scrapeProductPage(mySellerName) {
+  const seller = extractSeller();
+  const price = extractPrice();
+  const isAmazon = isAmazonSeller(seller);
+  const buyboxStatus = determineBuyboxStatus(seller, mySellerName);
+
+  // Only trigger offer-listing background fetch if seller AND price both unknown
+  // (AOD click already attempted before this point if seller was unknown)
+  const noBuybox = seller === 'Unknown' && !price;
+
   const result = {
     asin: extractASIN(),
     title: extractTitle(),
-    price: extractPrice(),
-    seller: extractSeller(),
+    price: price,
+    seller: seller,
     currency: extractCurrency(),
     rating: extractRating(),
-    reviewCount: extractReviewCount(),
+    review_count: extractReviewCount(),
     availability: extractAvailability(),
-    imageUrl: extractImageUrl(),
-    marketplace: window.location.hostname,
-    scrapedAt: new Date().toISOString()
+    image_url: extractImageUrl(),
+    marketplace: window.location.hostname.replace('www.', ''),
+    scraped_at: new Date().toISOString(),
+    is_amazon: isAmazon,
+    buybox_status: buyboxStatus,
+    needs_offer_listing: noBuybox  // signal to background.js to fetch offer-listing
   };
-
-  // Determine buybox status
-  result.isAmazon = isAmazonSeller(result.seller);
-  result.buyboxStatus = determineBuyboxStatus(result.seller);
 
   console.log('✅ Scrape complete:', result);
   return result;
@@ -40,18 +159,15 @@ function scrapeProductPage() {
 
 // Extract ASIN from URL or page
 function extractASIN() {
-  // Try URL first: /dp/B01ARH3Q5G or /gp/product/B01ARH3Q5G
   const urlMatch = window.location.pathname.match(/\/(?:dp|gp\/product)\/([A-Z0-9]{10})/);
   if (urlMatch) return urlMatch[1];
 
-  // Try canonical link
   const canonical = document.querySelector('link[rel="canonical"]');
   if (canonical) {
-    const canonicalMatch = canonical.href.match(/\/(?:dp|gp\/product)\/([A-Z0-9]{10})/);
-    if (canonicalMatch) return canonicalMatch[1];
+    const m = canonical.href.match(/\/(?:dp|gp\/product)\/([A-Z0-9]{10})/);
+    if (m) return m[1];
   }
 
-  // Try hidden input
   const asinInput = document.querySelector('input[name="ASIN"]');
   if (asinInput) return asinInput.value;
 
@@ -60,69 +176,171 @@ function extractASIN() {
 
 // Extract product title
 function extractTitle() {
-  const selectors = [
-    '#productTitle',
-    '#title',
-    'h1.product-title',
-    'h1 span#productTitle'
-  ];
-
-  for (const selector of selectors) {
-    const el = document.querySelector(selector);
+  const selectors = ['#productTitle', '#title', 'h1.product-title', 'h1 span#productTitle'];
+  for (const sel of selectors) {
+    const el = document.querySelector(sel);
     if (el) return el.textContent.trim();
   }
   return null;
 }
 
-// Extract buybox price
+// Extract buybox price - handles ZAR (R1 660,00), USD ($12.99), GBP (£53.48)
 function extractPrice() {
   const selectors = [
+    '#corePriceDisplay_desktop_feature_div .a-offscreen',
+    '#corePrice_feature_div .a-offscreen',
     '.a-price.aok-align-center .a-offscreen',
     '#priceblock_ourprice',
     '#priceblock_dealprice',
+    '#price_inside_buybox',
+    '.priceToPay .a-offscreen',
     '.a-price .a-offscreen',
-    'span.a-price-whole',
-    '#corePrice_feature_div .a-offscreen'
+    'span.a-price-whole'
   ];
 
   for (const selector of selectors) {
     const el = document.querySelector(selector);
     if (el) {
       let priceText = el.textContent.trim();
-      // Extract numeric value: "R1,660.00" -> 1660.00
-      const numMatch = priceText.match(/[\d,]+\.?\d*/);
-      if (numMatch) {
-        return parseFloat(numMatch[0].replace(/,/g, ''));
+      if (!priceText) continue;
+      priceText = priceText.replace(/[R£$€¥]/g, '').replace(/\u00a0|\u202f/g, '').trim();
+      // ZAR: "1 660,00" (space thousands, comma decimal)
+      if (priceText.includes(',') && !priceText.includes('.')) {
+        priceText = priceText.replace(/\s/g, '').replace(',', '.');
+      } else {
+        priceText = priceText.replace(/,/g, '').replace(/\s/g, '');
       }
+      const val = parseFloat(priceText);
+      if (!isNaN(val) && val > 0) return val;
     }
   }
   return null;
 }
 
-// Extract seller name
+// Extract seller name - covers all Amazon layouts including new ZA layout
 function extractSeller() {
-  const selectors = [
-    '#sellerProfileTriggerId',
-    'a#sellerProfileTriggerId',
-    '#merchant-info',
-    'div#merchant-info a',
-    'a[href*="seller"]'
-  ];
 
-  for (const selector of selectors) {
-    const el = document.querySelector(selector);
-    if (el) {
-      let sellerText = el.textContent.trim();
-      // Clean up common patterns
-      sellerText = sellerText.replace(/^Sold by:?\s*/i, '');
-      sellerText = sellerText.replace(/^Ships from and sold by:?\s*/i, '');
-      return sellerText;
+  // 0. AOD (All Offers Display) panel - exact selector from page inspection
+  // #aod-offer-soldBy > div > div > div.a-fixed-left-grid-col.a-col-right > a
+  const aodSeller = document.querySelector('#aod-offer-soldBy a, #aod-offer-soldBy .a-col-right a');
+  if (aodSeller) {
+    const aria = (aodSeller.getAttribute('aria-label') || '').replace(/\.\s*Opens a new page.*$/i, '').trim();
+    const t = aria || aodSeller.textContent.trim();
+    if (t && t.length > 1 && t.length < 100) return /amazon/i.test(t) ? 'Amazon.co.za' : t;
+  }
+
+  // 0b. AOD pinned offer seller (when AOD panel is open)
+  const aodPinned = document.querySelector('#aod-pinned-offer-soldBy a, #aod-offer-list .a-col-right a');
+  if (aodPinned) {
+    const t = aodPinned.textContent.trim();
+    if (t && t.length > 1 && t.length < 100) return /amazon/i.test(t) ? 'Amazon.co.za' : t;
+  }
+
+  // 1. Most reliable: sellerProfileTriggerId link (3rd party seller link)
+  const sellerLink = document.querySelector('a#sellerProfileTriggerId');
+  if (sellerLink) {
+    const t = sellerLink.textContent.trim();
+    if (t) return t;
+  }
+
+  // 2. NEW ZA LAYOUT: "Sold by" label + seller in adjacent spans
+  // Amazon renders "Sold byBonolo Online" as two adjacent spans inside a div.
+  // We scan ALL spans/divs for one that contains exactly "Sold by" and grab the next sibling text.
+  const allSpans = document.querySelectorAll('span, div');
+  for (const el of allSpans) {
+    // Must be a leaf-ish node whose own text is exactly "Sold by"
+    const ownText = el.childNodes.length === 1 && el.childNodes[0].nodeType === 3
+      ? el.childNodes[0].textContent.trim()
+      : el.textContent.trim();
+    if (ownText === 'Sold by') {
+      // Check next sibling element
+      let next = el.nextElementSibling;
+      if (next) {
+        const t = next.textContent.trim();
+        if (t && t.length > 1 && t.length < 100) {
+          return /amazon/i.test(t) ? 'Amazon.co.za' : t;
+        }
+      }
+      // Check parent's full text minus "Sold by" label
+      const parent = el.parentElement;
+      if (parent) {
+        const parentText = parent.textContent.trim();
+        const after = parentText.replace(/^Sold by\s*/i, '').trim();
+        if (after && after.length > 1 && after.length < 100) {
+          return /amazon/i.test(after) ? 'Amazon.co.za' : after;
+        }
+      }
     }
   }
 
-  // Check for Amazon.co.za specifically
+  // 3. Seller anchor — ONLY /gp/aag/main links (seller profile page, not delivery links)
+  // Exact pattern: aria-label="SellerName. Opens a new page" href="/gp/aag/main?..."
+  const aagAnchors = document.querySelectorAll('a[href*="/gp/aag/main"]');
+  for (const a of aagAnchors) {
+    // aria-label is the most reliable: "Bonolo Online. Opens a new page"
+    const aria = (a.getAttribute('aria-label') || '').replace(/\.\s*Opens a new page.*$/i, '').trim();
+    if (aria && aria.length > 1 && aria.length < 100 && !/see all|compare|offer|detail|delivery/i.test(aria)) {
+      return /amazon/i.test(aria) ? 'Amazon.co.za' : aria;
+    }
+    // Fallback: link text — but only if it looks like a seller name (not a sentence)
+    const txt = a.textContent.trim();
+    if (txt && txt.length > 1 && txt.length < 60 && !/see all|compare|offer|detail|delivery|about|costs|method/i.test(txt)) {
+      return /amazon/i.test(txt) ? 'Amazon.co.za' : txt;
+    }
+  }
+
+  // 3b. /sp? seller profile links (used on some Amazon layouts)
+  const sellerAnchors = document.querySelectorAll('a[href*="/sp?"]');
+  for (const a of sellerAnchors) {
+    const aria = (a.getAttribute('aria-label') || '').replace(/\.\s*Opens a new page.*$/i, '').trim();
+    const t = aria || a.textContent.trim();
+    if (t && t.length > 1 && t.length < 60 && !/see all|compare|detail|delivery/i.test(t)) {
+      return /amazon/i.test(t) ? 'Amazon.co.za' : t;
+    }
+  }
+
+  // 4. merchant-info div
   const merchantInfo = document.querySelector('#merchant-info');
-  if (merchantInfo && /amazon/i.test(merchantInfo.textContent)) {
+  if (merchantInfo) {
+    const a = merchantInfo.querySelector('a');
+    if (a && a.textContent.trim()) return a.textContent.trim();
+    const txt = merchantInfo.textContent.trim();
+    if (/amazon/i.test(txt)) return 'Amazon.co.za';
+  }
+
+  // 5. Tabular buybox "Sold by" row
+  const tabularBuybox = document.querySelector('#tabular-buybox');
+  if (tabularBuybox) {
+    const rows = tabularBuybox.querySelectorAll('.tabular-buybox-text');
+    for (const row of rows) {
+      const label = row.querySelector('.a-color-secondary');
+      const val = row.querySelector('.a-color-base');
+      if (label && val && /sold by/i.test(label.textContent)) {
+        return val.textContent.trim();
+      }
+    }
+  }
+
+  // 6. offer-display-feature-text-message spans
+  const offerSpans = document.querySelectorAll('.offer-display-feature-text-message');
+  for (const span of offerSpans) {
+    const t = span.textContent.trim();
+    if (t) return /amazon/i.test(t) ? 'Amazon.co.za' : t;
+  }
+
+  // 7. Full page innerText scan — "Sold by X" with optional colon/space
+  // Also handles "Sold byX" (no space) by using \s* instead of \s+
+  const bodyText = document.body.innerText;
+  const soldByMatch = bodyText.match(/Sold by\s*([^\n\r]{2,80}?)(?:\n|Seller rating|Ships|Delivered|$)/i);
+  if (soldByMatch) {
+    const name = soldByMatch[1].trim().replace(/\s*\(.*$/, ''); // strip trailing "(16 ratings)"
+    if (name && name.length > 1 && name.length < 100) {
+      return /amazon/i.test(name) ? 'Amazon.co.za' : name;
+    }
+  }
+
+  // 8. Shipped and sold by Amazon
+  if (/sent from and sold by amazon|ships from and sold by amazon/i.test(bodyText)) {
     return 'Amazon.co.za';
   }
 
@@ -134,32 +352,15 @@ function extractCurrency() {
   const priceEl = document.querySelector('.a-price-symbol');
   if (priceEl) {
     const symbol = priceEl.textContent.trim();
-    const currencyMap = {
-      'R': 'ZAR',
-      '$': 'USD',
-      '£': 'GBP',
-      '€': 'EUR',
-      '¥': 'JPY',
-      'C$': 'CAD',
-      'A$': 'AUD'
-    };
+    const currencyMap = { 'R': 'ZAR', '$': 'USD', '£': 'GBP', '€': 'EUR', '¥': 'JPY', 'C$': 'CAD', 'A$': 'AUD' };
     return currencyMap[symbol] || symbol;
   }
-
-  // Fallback based on domain
   const domainMap = {
-    'amazon.co.za': 'ZAR',
-    'amazon.com': 'USD',
-    'amazon.co.uk': 'GBP',
-    'amazon.de': 'EUR',
-    'amazon.fr': 'EUR',
-    'amazon.it': 'EUR',
-    'amazon.es': 'EUR',
-    'amazon.co.jp': 'JPY',
-    'amazon.ca': 'CAD',
-    'amazon.com.au': 'AUD'
+    'amazon.co.za': 'ZAR', 'amazon.com': 'USD', 'amazon.co.uk': 'GBP',
+    'amazon.de': 'EUR', 'amazon.fr': 'EUR', 'amazon.it': 'EUR',
+    'amazon.es': 'EUR', 'amazon.co.jp': 'JPY', 'amazon.ca': 'CAD', 'amazon.com.au': 'AUD'
   };
-  return domainMap[window.location.hostname] || 'USD';
+  return domainMap[window.location.hostname.replace('www.', '')] || 'USD';
 }
 
 // Extract rating
@@ -177,9 +378,7 @@ function extractRating() {
 function extractReviewCount() {
   const reviewEl = document.querySelector('#acrCustomerReviewText, [data-hook="total-review-count"]');
   if (reviewEl) {
-    const reviewText = reviewEl.textContent.trim();
-    // Extract number: "25 ratings" or "(25)" -> 25
-    const cleaned = reviewText.replace(/[(),]/g, '').trim();
+    const cleaned = reviewEl.textContent.trim().replace(/[(),]/g, '').trim();
     const match = cleaned.match(/(\d+)/);
     if (match) return parseInt(match[1]);
   }
@@ -203,7 +402,7 @@ function extractAvailability() {
 function extractImageUrl() {
   const imgEl = document.querySelector('#landingImage, #imgBlkFront, .a-dynamic-image');
   if (imgEl) {
-    return imgEl.src || imgEl.getAttribute('data-old-hires') || imgEl.getAttribute('data-a-dynamic-image');
+    return imgEl.src || imgEl.getAttribute('data-old-hires') || null;
   }
   return null;
 }
@@ -215,49 +414,34 @@ function isAmazonSeller(seller) {
 }
 
 // Determine buybox status
-function determineBuyboxStatus(seller) {
+function determineBuyboxStatus(seller, mySellerName) {
   if (!seller || seller === 'Unknown') return 'unknown';
   if (isAmazonSeller(seller)) return 'amazon';
-  
-  // You can customize this with your seller name
-  // For now, assume non-Amazon = losing
+  if (mySellerName && seller.toLowerCase().includes(mySellerName.toLowerCase())) return 'winning';
   return 'losing';
 }
 
-// Add visual indicator when extension is active
+// Visual indicator when extension is active
 function showExtensionIndicator() {
   const indicator = document.createElement('div');
   indicator.id = 'buybox-tracker-indicator';
   indicator.innerHTML = '🎯 Buybox Tracker Active';
   indicator.style.cssText = `
-    position: fixed;
-    bottom: 20px;
-    right: 20px;
-    background: #FF9900;
-    color: white;
-    padding: 10px 15px;
-    border-radius: 5px;
-    font-family: Arial, sans-serif;
-    font-size: 12px;
-    font-weight: bold;
-    z-index: 999999;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-    opacity: 0;
-    transition: opacity 0.3s;
+    position: fixed; bottom: 20px; right: 20px;
+    background: #FF9900; color: white;
+    padding: 10px 15px; border-radius: 5px;
+    font-family: Arial, sans-serif; font-size: 12px; font-weight: bold;
+    z-index: 999999; box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+    opacity: 0; transition: opacity 0.3s;
   `;
   document.body.appendChild(indicator);
-  
-  // Fade in
   setTimeout(() => indicator.style.opacity = '1', 100);
-  
-  // Fade out after 3 seconds
   setTimeout(() => {
     indicator.style.opacity = '0';
     setTimeout(() => indicator.remove(), 300);
   }, 3000);
 }
 
-// Show indicator when page loads
 if (window.location.pathname.match(/\/(?:dp|gp\/product)\//)) {
   showExtensionIndicator();
 }

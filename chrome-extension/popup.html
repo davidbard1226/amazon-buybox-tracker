@@ -10,59 +10,76 @@
   <div class="container">
     <header>
       <h1>🎯 Amazon Buybox Tracker</h1>
-      <p class="version">v1.0.0</p>
+      <p class="version">v1.1.0</p>
     </header>
 
     <!-- Tab Navigation -->
     <div class="tabs">
       <button class="tab-btn active" data-tab="scrape">Scrape</button>
+      <button class="tab-btn" data-tab="bulk">Bulk ASINs</button>
       <button class="tab-btn" data-tab="settings">Settings</button>
     </div>
 
     <!-- Status Message -->
     <div id="status" class="status" style="display: none;"></div>
 
-    <!-- Scrape Tab -->
+    <!-- ── SCRAPE TAB ── -->
     <div id="scrapeTab" class="tab-content active">
       <div class="section">
-        <p class="description">Click the button below to scrape the current Amazon product page.</p>
-        <button id="scrapeBtn" class="btn btn-primary">
-          📊 Scrape This Page
-        </button>
+        <p class="description">Navigate to any Amazon product page, then click Scrape to push data to your dashboard.</p>
+        <button id="scrapeBtn" class="btn btn-primary">📊 Scrape This Page</button>
+        <button id="openDashboardBtn" class="btn btn-secondary" style="margin-top:8px;">🖥️ Open Dashboard</button>
       </div>
-
       <div id="scrapeResult" class="result-container" style="display: none;"></div>
     </div>
 
-    <!-- Settings Tab -->
+    <!-- ── BULK ASINs TAB ── -->
+    <div id="bulkTab" class="tab-content">
+      <div class="section">
+        <h3>Bulk ASIN / URL Upload</h3>
+        <p class="description">Paste one ASIN or Amazon URL per line. The backend will scrape all of them in the background.</p>
+        <textarea
+          id="bulkInput"
+          class="bulk-textarea"
+          placeholder="B01ARGZ8N0&#10;B07XY1234Z&#10;https://www.amazon.co.za/dp/B09ABC1234&#10;..."
+          rows="8"
+        ></textarea>
+        <p class="hint" id="bulkCount">0 ASINs detected</p>
+
+        <div class="button-group">
+          <button id="bulkSubmitBtn" class="btn btn-primary">🚀 Submit to Dashboard</button>
+          <button id="bulkClearBtn" class="btn btn-secondary">🗑️ Clear</button>
+        </div>
+
+        <div id="bulkResult" class="result-container" style="display:none; margin-top:12px;"></div>
+      </div>
+    </div>
+
+    <!-- ── SETTINGS TAB ── -->
     <div id="settingsTab" class="tab-content">
       <div class="section">
         <h3>Backend Configuration</h3>
-        <label for="backendUrl">Backend URL</label>
-        <input 
-          type="text" 
-          id="backendUrl" 
+        <label for="backendUrl">Render.com Backend URL</label>
+        <input
+          type="text"
+          id="backendUrl"
           placeholder="https://your-app.onrender.com"
           class="input-field"
         >
-        <p class="hint">Enter your Render.com backend URL</p>
+        <p class="hint">No trailing slash needed. e.g. https://buybox-api.onrender.com</p>
 
-        <label for="mySellerName">Your Seller Name (Optional)</label>
-        <input 
-          type="text" 
-          id="mySellerName" 
-          placeholder="Your Amazon seller name"
+        <label for="mySellerName">Your Seller Name</label>
+        <input
+          type="text"
+          id="mySellerName"
+          placeholder="e.g. Bonolo Online"
           class="input-field"
         >
-        <p class="hint">Used to identify when you win the buybox</p>
+        <p class="hint">Used to detect when you win the buybox (🟢 Winning)</p>
 
         <div class="button-group">
-          <button id="saveSettingsBtn" class="btn btn-primary">
-            💾 Save Settings
-          </button>
-          <button id="testConnectionBtn" class="btn btn-secondary">
-            🔌 Test Connection
-          </button>
+          <button id="saveSettingsBtn" class="btn btn-primary">💾 Save Settings</button>
+          <button id="testConnectionBtn" class="btn btn-secondary">🔌 Test Connection</button>
         </div>
       </div>
     </div>

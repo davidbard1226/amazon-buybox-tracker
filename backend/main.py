@@ -765,61 +765,93 @@ def extension_scrape(data: dict):
     """
     Receive scraped data from Chrome extension and save to database.
     This bypasses all bot detection since data comes from real browser.
+    Field names from extension: asin, title, seller, price, currency,
+    rating, review_count, availability, image_url, marketplace,
+    is_amazon, buybox_status, scraped_at
     """
     try:
-        logger.info(f"📦 Received data from Chrome extension for ASIN: {data.get('asin')}")
-        
-        # Extract data from extension
-        asin = data.get("asin", "").strip().upper()
-        if not asin:
-            raise HTTPException(status_code=400, detail="ASIN is required")
-        
-        # Prepare data for database
+        logger.info(f"📦 Received extension data: {data}")
+
+        # Extract and validate ASIN
+        asin = (data.get("asin") or "").strip().upper()
+        if not asin or len(asin) != 10:
+            raise HTTPException(status_code=400, detail=f"Invalid ASIN: '{asin}'")
+
+        # Determine buybox status - extension sends buybox_status already
+        # but also re-check against MY_SELLER_NAME for safety
+        seller = data.get("seller") or "Unknown"
+        ext_status = data.get("buybox_status", "unknown")
+        is_amazon = bool(data.get("is_amazon", False)) or bool(re.search(r'\bamazon\b', seller, re.I))
+        is_mine = MY_SELLER_NAME.lower() in seller.lower() if seller else False
+        if is_mine:
+            buybox_status = "winning"
+        elif is_amazon:
+            buybox_status = "amazon"
+        elif ext_status and ext_status != "unknown":
+            buybox_status = ext_status
+        elif seller and seller != "Unknown":
+            buybox_status = "losing"
+        else:
+            buybox_status = "unknown"
+
+        # Normalise marketplace - strip www. prefix if present
+        marketplace = (data.get("marketplace") or "amazon.co.za").replace("www.", "")
+
+        # Map extension field names → database field names
         db_data = {
             "asin": asin,
             "title": data.get("title"),
             "image_url": data.get("image_url"),
-            "marketplace": data.get("marketplace", "amazon.co.za"),
+            "marketplace": marketplace,
             "buybox_price": data.get("price"),
-            "buybox_seller": data.get("seller", "Unknown"),
-            "buybox_status": data.get("status", "unknown"),
+            "buybox_seller": seller,
+            "buybox_status": buybox_status,
             "currency": data.get("currency", "ZAR"),
             "rating": data.get("rating"),
             "review_count": data.get("review_count"),
             "availability": data.get("availability", "Unknown"),
-            "is_amazon_seller": data.get("is_amazon", False),
+            "is_amazon_seller": is_amazon,
             "scraped_at": datetime.utcnow(),
-            "created_at": datetime.utcnow(),
-            "updated_at": datetime.utcnow()
         }
-        
+
         # Save to database
         db = SessionLocal()
         try:
             existing = db.query(TrackedASIN).filter(TrackedASIN.asin == asin).first()
             if existing:
-                # Update existing
                 for key, value in db_data.items():
-                    if key not in ["created_at"]:
+                    if key != "created_at" and hasattr(existing, key):
                         setattr(existing, key, value)
-                logger.info(f"✅ Updated ASIN {asin} from extension")
+                existing.updated_at = datetime.utcnow()
+                logger.info(f"✅ Updated ASIN {asin} from extension — seller={seller}, status={buybox_status}")
             else:
-                # Create new
                 new_asin = TrackedASIN(**db_data)
                 db.add(new_asin)
-                logger.info(f"✅ Created new ASIN {asin} from extension")
-            
+                logger.info(f"✅ Created new ASIN {asin} from extension — seller={seller}, status={buybox_status}")
+
             db.commit()
-            
+
+            # Save price history entry
+            if db_data.get("buybox_price"):
+                save_price_history(db, {
+                    "asin": asin,
+                    "marketplace": marketplace,
+                    "buybox_price": db_data["buybox_price"],
+                    "buybox_seller": seller,
+                    "buybox_status": buybox_status,
+                })
+
             return {
                 "success": True,
                 "message": f"ASIN {asin} saved successfully",
                 "asin": asin,
+                "buybox_status": buybox_status,
+                "seller": seller,
                 "source": "chrome_extension"
             }
         finally:
             db.close()
-            
+
     except HTTPException:
         raise
     except Exception as e:
@@ -831,9 +863,9 @@ def extension_scrape(data: dict):
 def extension_config():
     """Return configuration for Chrome extension."""
     return {
-        "api_url": str(request.url).replace("/api/extension/config", ""),
         "seller_name": MY_SELLER_NAME,
-        "marketplace": "amazon.co.za"
+        "marketplace": "amazon.co.za",
+        "version": "1.0.0"
     }
 
 

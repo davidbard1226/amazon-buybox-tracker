@@ -89,12 +89,14 @@ def start_scheduler():
     global _interval_hours, _enabled
     settings = load_scheduler_settings()
     _interval_hours = settings.get("interval_hours", 6.0)
-    _enabled = settings.get("enabled", True)
+    # Default to DISABLED - we use Chrome Extension for scraping to avoid bot detection.
+    # Enable via SCHEDULER_ENABLED=true env var on Render if you want server-side auto-refresh.
+    _enabled = settings.get("enabled", False)
     if _enabled:
         _schedule_next()
         logger.info(f"Scheduler started - runs every {_interval_hours} hours")
     else:
-        logger.info("Scheduler disabled")
+        logger.info("Scheduler disabled by default - using Chrome Extension for scraping")
 
 def stop_scheduler():
     global _timer

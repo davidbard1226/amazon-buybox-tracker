@@ -545,16 +545,67 @@ function renderTable() {
   `).join('');
 }
 
+// ── Refresh via Extension (open tab, auto-scrape, close) ─────────
 async function quickRefresh(asin, market) {
-  showAlert('alertBox', `<span class="loading"></span>Refreshing ${asin}...`, 'info');
-  try {
-    const r = await fetch(API + '/api/buybox/lookup', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({asin,marketplace:market})});
-    const d = await r.json();
-    const idx = allProducts.findIndex(p => p.asin === asin);
-    if (idx >= 0) allProducts[idx] = d;
-    updateStats(); renderTable();
-    showAlert('alertBox', `✅ ${asin} refreshed — Seller: ${d.buybox_seller || 'Unknown'}, Price: ${d.buybox_price || 'N/A'}`, 'success');
-  } catch(e) { showAlert('alertBox', '❌ Refresh failed', 'error'); }
+  showAlert('alertBox', `<span class="loading"></span>Opening ${asin} for auto-scrape — tab will close automatically...`, 'info');
+
+  // Build the Amazon product URL with ?auto_scrape=1 flag
+  const domain = market || 'amazon.co.za';
+  const productUrl = `https://www.${domain}/dp/${asin}?auto_scrape=1&dashboard=${encodeURIComponent(window.location.origin)}`;
+
+  // Open tab — extension content.js will detect auto_scrape=1, scrape, push to backend, close tab
+  const newTab = window.open(productUrl, '_blank');
+
+  // Poll backend for updated data (extension pushes to /api/extension/scrape)
+  let attempts = 0;
+  const maxAttempts = 24; // 24 × 2.5s = 60s timeout
+  const poll = setInterval(async () => {
+    attempts++;
+    try {
+      const r = await fetch(API + '/api/buybox/tracked');
+      const d = await r.json();
+      const updated = (d.asins || []).find(p => p.asin === asin);
+      if (updated && updated.scraped_at) {
+        const scrapeTime = new Date(updated.scraped_at).getTime();
+        const now = Date.now();
+        // If scraped in the last 60 seconds, it's fresh data
+        if (now - scrapeTime < 60000) {
+          clearInterval(poll);
+          const idx = allProducts.findIndex(p => p.asin === asin);
+          if (idx >= 0) allProducts[idx] = updated; else allProducts.push(updated);
+          updateStats(); renderTable();
+          showAlert('alertBox', `✅ ${asin} refreshed — Seller: ${updated.buybox_seller || 'Unknown'}, Price: ${updated.buybox_price ? 'R'+updated.buybox_price : 'N/A'}`, 'success');
+          try { if (newTab && !newTab.closed) newTab.close(); } catch(e) {}
+          return;
+        }
+      }
+    } catch(e) {}
+    if (attempts >= maxAttempts) {
+      clearInterval(poll);
+      showAlert('alertBox', `⚠️ Timeout waiting for ${asin}. Make sure the Chrome Extension is installed and enabled. The tab may still be loading.`, 'error');
+    }
+  }, 2500);
+}
+
+async function refreshAll() {
+  if (!allProducts.length) { showAlert('alertBox', '⚠️ No products tracked yet.', 'error'); return; }
+  showAlert('alertBox', `<span class="loading"></span>Opening tabs for all ${allProducts.length} products — extension will scrape each one...`, 'info');
+  // Open tabs one at a time with a delay to avoid overwhelming Amazon
+  let i = 0;
+  const openNext = () => {
+    if (i >= allProducts.length) {
+      setTimeout(() => loadDashboard(), 5000);
+      return;
+    }
+    const p = allProducts[i++];
+    const domain = p.marketplace || 'amazon.co.za';
+    const url = `https://www.${domain}/dp/${p.asin}?auto_scrape=1&dashboard=${encodeURIComponent(window.location.origin)}`;
+    window.open(url, '_blank');
+    setTimeout(openNext, 3000); // 3s between tabs
+  };
+  openNext();
+  showAlert('alertBox', `⏳ Opening ${allProducts.length} tabs (3s apart). Extension will scrape each and close the tab. Dashboard reloads in ~${allProducts.length * 3 + 10}s`, 'info');
+  setTimeout(() => loadDashboard(), (allProducts.length * 3 + 10) * 1000);
 }
 
 async function removeASIN(asin) {
@@ -565,17 +616,37 @@ async function removeASIN(asin) {
 }
 
 async function refreshAll() {
-  showAlert('alertBox', `<span class="loading"></span>Refreshing all ${allProducts.length} products...`, 'info');
-  for (const p of allProducts) {
-    try {
-      const r = await fetch(API + '/api/buybox/lookup', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({asin:p.asin,marketplace:p.marketplace})});
-      const d = await r.json();
-      const idx = allProducts.findIndex(x => x.asin === p.asin);
-      if (idx >= 0) allProducts[idx] = d;
-    } catch(e) {}
+  if (!allProducts.length) { showAlert('alertBox', '⚠️ No products tracked yet.', 'error'); return; }
+  showAlert('alertBox', `<span class="loading"></span>Refreshing all ${allProducts.length} products via backend scheduler...`, 'info');
+  try {
+    // Trigger the backend scheduler to re-scrape all ASINs
+    const r = await fetch(API + '/api/scheduler/run-now', {method:'POST'});
+    if (r.ok) {
+      showAlert('alertBox', `⏳ Refresh triggered for ${allProducts.length} products. Dashboard will update in ~30 seconds. Click 🏠 Dashboard to reload.`, 'info');
+      // Auto-reload dashboard after 35 seconds
+      setTimeout(() => loadDashboard(), 35000);
+    } else {
+      throw new Error('Scheduler not available');
+    }
+  } catch(e) {
+    // Fallback: refresh one by one via backend
+    showAlert('alertBox', `<span class="loading"></span>Refreshing ${allProducts.length} products one by one...`, 'info');
+    let done = 0;
+    for (const p of allProducts) {
+      try {
+        const r = await fetch(API + '/api/buybox/lookup', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({asin:p.asin,marketplace:p.marketplace})});
+        const d = await r.json();
+        if (d.status !== 'blocked') {
+          const idx = allProducts.findIndex(x => x.asin === p.asin);
+          if (idx >= 0) allProducts[idx] = d;
+        }
+        done++;
+        showAlert('alertBox', `<span class="loading"></span>Refreshed ${done}/${allProducts.length}...`, 'info');
+      } catch(e2) {}
+    }
+    updateStats(); renderTable();
+    showAlert('alertBox', `✅ Refreshed ${done} of ${allProducts.length} products.`, 'success');
   }
-  updateStats(); renderTable();
-  showAlert('alertBox', `✅ All products refreshed!`, 'success');
 }
 
 // ── Single Lookup ─────────────────────────────────────────────────
@@ -679,57 +750,129 @@ async function viewHistory(asin) {
 }
 
 // ── Bulk Upload ───────────────────────────────────────────────────
+let _bulkPollTimer = null;
+
+function _stopBulkPoll() {
+  if (_bulkPollTimer) { clearInterval(_bulkPollTimer); _bulkPollTimer = null; }
+}
+
+function _parseBulkLines(raw) {
+  // Extract ASINs from raw text (10-char alphanumeric, possibly in URLs)
+  const asinRe = /\b([A-Z0-9]{10})\b/gi;
+  const found = new Set();
+  for (const m of raw.matchAll(asinRe)) found.add(m[1].toUpperCase());
+  return [...found];
+}
+
+function _renderBulkProgress(job) {
+  const pct = job.total > 0 ? Math.round((job.done / job.total) * 100) : 0;
+  const done = job.status === 'done';
+  const barColor = done ? '#10b981' : '#6366f1';
+  const failedHtml = (job.failed && job.failed.length > 0) ? `
+    <div style="margin-top:10px;background:#ef444411;border:1px solid #ef444433;border-radius:8px;padding:10px 14px;">
+      <div style="font-size:0.8rem;color:#ef4444;font-weight:600;margin-bottom:4px;">Failed ASINs:</div>
+      ${job.failed.map(f=>`<div style="font-size:0.75rem;color:#94a3b8;"><span style="color:#f97316;">${f.asin}</span> — ${f.error}</div>`).join('')}
+    </div>` : '';
+
+  const resultsHtml = (job.results && job.results.length > 0) ? `
+    <table style="width:100%;font-size:0.82rem;border-collapse:collapse;margin-top:12px;">
+      <thead><tr style="background:#0f172a;">
+        <th style="padding:8px;text-align:left;color:#94a3b8;">ASIN</th>
+        <th style="padding:8px;text-align:left;color:#94a3b8;">Product</th>
+        <th style="padding:8px;text-align:left;color:#94a3b8;">Price</th>
+        <th style="padding:8px;text-align:left;color:#94a3b8;">Seller</th>
+        <th style="padding:8px;text-align:left;color:#94a3b8;">Status</th>
+      </tr></thead>
+      <tbody>${job.results.map(p=>`
+        <tr style="border-bottom:1px solid #1e293b;">
+          <td style="padding:8px;font-family:monospace;color:#94a3b8;">${p.asin}</td>
+          <td style="padding:8px;max-width:200px;">${(p.title||'—').substring(0,60)}</td>
+          <td style="padding:8px;">${fmtPrice(p.buybox_price,p.marketplace)}</td>
+          <td style="padding:8px;">${fmtSeller(p.buybox_seller,p.buybox_status)}</td>
+          <td style="padding:8px;">${fmtStatus(p.buybox_status)}</td>
+        </tr>`).join('')}
+      </tbody>
+    </table>` : '';
+
+  document.getElementById('bulkResult').innerHTML = `
+    <div style="margin-top:14px;">
+      <div style="display:flex;justify-content:space-between;font-size:0.85rem;color:#94a3b8;margin-bottom:6px;">
+        <span>${done ? '✅ Complete' : '⏳ Scraping...'} &nbsp;${job.done}/${job.total} ASINs
+          ${job.failed&&job.failed.length>0?`<span style="color:#ef4444;margin-left:8px;">· ${job.failed.length} failed</span>`:''}
+        </span>
+        <span style="color:${done?'#10b981':'#f59e0b'};font-weight:700;">${pct}%</span>
+      </div>
+      <div style="height:8px;background:#0f172a;border-radius:4px;overflow:hidden;">
+        <div style="height:100%;width:${pct}%;background:${barColor};border-radius:4px;transition:width 0.5s ease;"></div>
+      </div>
+      ${failedHtml}
+      ${resultsHtml}
+    </div>`;
+}
+
 async function submitBulk() {
   const raw = document.getElementById('bulkInput').value.trim();
   const market = document.getElementById('bulkMarket').value;
   if (!raw) { showAlert('bulkAlert','⚠️ Please enter at least one ASIN or URL','error'); return; }
 
-  const lines = raw.split('\n').map(l => l.trim()).filter(l => l);
+  const asins = _parseBulkLines(raw);
+  if (asins.length === 0) { showAlert('bulkAlert','⚠️ No valid ASINs found (10-character codes like B01ARH3Q5G)','error'); return; }
+
   const btn = document.getElementById('bulkBtn');
-  btn.disabled = true; btn.innerHTML = '<span class="loading"></span>Processing...';
-  showAlert('bulkAlert', `<span class="loading"></span>Fetching ${lines.length} ASINs/URLs... This may take a while.`, 'info');
+  btn.disabled = true; btn.innerHTML = '<span class="loading"></span>Starting...';
+  showAlert('bulkAlert', `<span class="loading"></span>Starting background scrape for ${asins.length} ASINs...`, 'info');
   document.getElementById('bulkResult').innerHTML = '';
+  _stopBulkPoll();
 
   try {
-    const r = await fetch(API + '/api/buybox/bulk-urls', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({urls:lines,marketplace:market})});
-    const d = await r.json();
-    const results = d.results || [];
-
-    // Add to allProducts
-    results.forEach(p => {
-      const idx = allProducts.findIndex(x => x.asin === p.asin);
-      if (idx >= 0) allProducts[idx] = p; else allProducts.push(p);
+    const r = await fetch(API + '/api/buybox/bulk-start', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({asins, marketplace: market})
     });
+    if (!r.ok) {
+      const err = await r.json().catch(()=>({detail:'Server error'}));
+      throw new Error(err.detail || `HTTP ${r.status}`);
+    }
+    const job = await r.json();
+    const jobId = job.job_id;
 
-    const winning = results.filter(p=>p.buybox_status==='winning').length;
-    const losing  = results.filter(p=>p.buybox_status==='losing').length;
-    const amazon  = results.filter(p=>p.buybox_status==='amazon').length;
+    btn.innerHTML = '<span class="loading"></span>Scraping...';
+    showAlert('bulkAlert', `⏳ Scraping ${asins.length} ASINs in background — results update every 3s`, 'info');
 
-    showAlert('bulkAlert', `✅ Fetched ${results.length} products — 🏆 ${winning} winning, 😞 ${losing} losing, 🛒 ${amazon} Amazon`, 'success');
+    _bulkPollTimer = setInterval(async () => {
+      try {
+        const sr = await fetch(API + '/api/buybox/bulk-status/' + jobId);
+        const status = await sr.json();
+        _renderBulkProgress(status);
 
-    document.getElementById('bulkResult').innerHTML = `
-      <table style="width:100%;font-size:0.82rem;border-collapse:collapse;margin-top:8px;">
-        <thead><tr style="background:#0f172a;">
-          <th style="padding:8px;text-align:left;color:#94a3b8;">ASIN</th>
-          <th style="padding:8px;text-align:left;color:#94a3b8;">Product</th>
-          <th style="padding:8px;text-align:left;color:#94a3b8;">Price</th>
-          <th style="padding:8px;text-align:left;color:#94a3b8;">Seller</th>
-          <th style="padding:8px;text-align:left;color:#94a3b8;">Status</th>
-        </tr></thead>
-        <tbody>${results.map(p=>`
-          <tr style="border-bottom:1px solid #1e293b;">
-            <td style="padding:8px;font-family:monospace;color:#94a3b8;">${p.asin}</td>
-            <td style="padding:8px;max-width:200px;">${p.title||'—'}</td>
-            <td style="padding:8px;">${fmtPrice(p.buybox_price,p.marketplace)}</td>
-            <td style="padding:8px;">${fmtSeller(p.buybox_seller,p.buybox_status)}</td>
-            <td style="padding:8px;">${fmtStatus(p.buybox_status)}</td>
-          </tr>`).join('')}
-        </tbody>
-      </table>`;
+        // Sync new results into allProducts
+        (status.results || []).forEach(p => {
+          const idx = allProducts.findIndex(x => x.asin === p.asin);
+          if (idx >= 0) allProducts[idx] = p; else allProducts.push(p);
+        });
+
+        if (status.status === 'done') {
+          _stopBulkPoll();
+          btn.disabled = false; btn.innerHTML = '🚀 Fetch All';
+          const winning = (status.results||[]).filter(p=>p.buybox_status==='winning').length;
+          const losing  = (status.results||[]).filter(p=>p.buybox_status==='losing').length;
+          const amazon  = (status.results||[]).filter(p=>p.buybox_status==='amazon').length;
+          showAlert('bulkAlert', `✅ Done! ${status.results.length} scraped — 🏆 ${winning} winning, 😞 ${losing} losing, 🛒 ${amazon} Amazon`, 'success');
+          loadDashboard(); // refresh dashboard table
+        }
+      } catch(e) {
+        _stopBulkPoll();
+        btn.disabled = false; btn.innerHTML = '🚀 Fetch All';
+        showAlert('bulkAlert', '❌ Lost connection to job: ' + e.message, 'error');
+      }
+    }, 3000);
+
   } catch(e) {
+    _stopBulkPoll();
     showAlert('bulkAlert', '❌ Bulk fetch failed: ' + e.message, 'error');
+    btn.disabled = false; btn.innerHTML = '🚀 Fetch All';
   }
-  btn.disabled = false; btn.innerHTML = '🚀 Fetch All';
 }
 
 // ── Analytics ─────────────────────────────────────────────────────
@@ -908,6 +1051,8 @@ async function testTelegram() {
 
 async function testWhatsApp() {
   showAlert('alertSettingsMsg', '📤 Sending test message...', 'info');
+  // Save current values first so the backend has them
+  await saveAlertSettings();
   try {
     const r = await fetch(API + '/api/alerts/test', { method:'POST' });
     const d = await r.json();
