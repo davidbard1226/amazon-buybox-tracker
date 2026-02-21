@@ -788,7 +788,7 @@ async function submitBulk() {
           const losing  = (status.results||[]).filter(p=>p.buybox_status==='losing').length;
           const amazon  = (status.results||[]).filter(p=>p.buybox_status==='amazon').length;
           showAlert('bulkAlert', `✅ Done! ${status.results.length} scraped — 🏆 ${winning} winning, 😞 ${losing} losing, 🛒 ${amazon} Amazon`, 'success');
-          loadProducts(); // refresh dashboard table
+          loadDashboard(); // refresh dashboard table
         }
       } catch(e) {
         _stopBulkPoll();
@@ -980,6 +980,8 @@ async function testTelegram() {
 
 async function testWhatsApp() {
   showAlert('alertSettingsMsg', '📤 Sending test message...', 'info');
+  // Save current values first so the backend has them
+  await saveAlertSettings();
   try {
     const r = await fetch(API + '/api/alerts/test', { method:'POST' });
     const d = await r.json();
