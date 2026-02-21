@@ -759,6 +759,84 @@ def bulk_status(job_id: str):
         raise HTTPException(status_code=500, detail=f"Failed to get job status: {str(e)}")
 
 
+# ===== CHROME EXTENSION API ENDPOINTS =====
+@app.post("/api/extension/scrape")
+def extension_scrape(data: dict):
+    """
+    Receive scraped data from Chrome extension and save to database.
+    This bypasses all bot detection since data comes from real browser.
+    """
+    try:
+        logger.info(f"📦 Received data from Chrome extension for ASIN: {data.get('asin')}")
+        
+        # Extract data from extension
+        asin = data.get("asin", "").strip().upper()
+        if not asin:
+            raise HTTPException(status_code=400, detail="ASIN is required")
+        
+        # Prepare data for database
+        db_data = {
+            "asin": asin,
+            "title": data.get("title"),
+            "image_url": data.get("image_url"),
+            "marketplace": data.get("marketplace", "amazon.co.za"),
+            "buybox_price": data.get("price"),
+            "buybox_seller": data.get("seller", "Unknown"),
+            "buybox_status": data.get("status", "unknown"),
+            "currency": data.get("currency", "ZAR"),
+            "rating": data.get("rating"),
+            "review_count": data.get("review_count"),
+            "availability": data.get("availability", "Unknown"),
+            "is_amazon_seller": data.get("is_amazon", False),
+            "scraped_at": datetime.utcnow(),
+            "created_at": datetime.utcnow(),
+            "updated_at": datetime.utcnow()
+        }
+        
+        # Save to database
+        db = SessionLocal()
+        try:
+            existing = db.query(TrackedASIN).filter(TrackedASIN.asin == asin).first()
+            if existing:
+                # Update existing
+                for key, value in db_data.items():
+                    if key not in ["created_at"]:
+                        setattr(existing, key, value)
+                logger.info(f"✅ Updated ASIN {asin} from extension")
+            else:
+                # Create new
+                new_asin = TrackedASIN(**db_data)
+                db.add(new_asin)
+                logger.info(f"✅ Created new ASIN {asin} from extension")
+            
+            db.commit()
+            
+            return {
+                "success": True,
+                "message": f"ASIN {asin} saved successfully",
+                "asin": asin,
+                "source": "chrome_extension"
+            }
+        finally:
+            db.close()
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Extension scrape error: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to save extension data: {str(e)}")
+
+
+@app.get("/api/extension/config")
+def extension_config():
+    """Return configuration for Chrome extension."""
+    return {
+        "api_url": str(request.url).replace("/api/extension/config", ""),
+        "seller_name": MY_SELLER_NAME,
+        "marketplace": "amazon.co.za"
+    }
+
+
 @app.post("/api/buybox/bulk-add")
 def bulk_add_asins(req: BulkASINRequest, db: Session = Depends(get_db)):
     """Instantly save ASINs to the database without scraping.
