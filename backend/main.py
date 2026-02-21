@@ -78,6 +78,8 @@ _jobs_lock = threading.Lock()
 
 def _run_bulk_job(job_id: str, asins: List[str], marketplace: str):
     """Scrape ASINs in a background thread, updating job status as we go."""
+    logger.info(f"[job {job_id}] Starting bulk job with {len(asins)} ASINs")
+    
     with _jobs_lock:
         _jobs[job_id]["status"] = "running"
 
@@ -88,13 +90,20 @@ def _run_bulk_job(job_id: str, asins: List[str], marketplace: str):
     db = SessionLocal()
     try:
         for i, asin in enumerate(asins):
-            data = scrape_with_retry(asin, marketplace)
-            save_asin(db, data)
-            if data.get("status") == "success":
-                save_price_history(db, data)
-                results.append(data)
-            else:
-                failed.append({"asin": asin, "error": data.get("error", "Unknown error")})
+            try:
+                logger.info(f"[job {job_id}] Scraping ASIN {i+1}/{len(asins)}: {asin}")
+                data = scrape_with_retry(asin, marketplace)
+                save_asin(db, data)
+                if data.get("status") == "success":
+                    save_price_history(db, data)
+                    results.append(data)
+                    logger.info(f"[job {job_id}] ✅ {asin}: {data.get('buybox_seller', 'Unknown')}")
+                else:
+                    failed.append({"asin": asin, "error": data.get("error", "Unknown error")})
+                    logger.warning(f"[job {job_id}] ❌ {asin}: {data.get('error', 'Unknown error')}")
+            except Exception as e:
+                logger.error(f"[job {job_id}] Error scraping {asin}: {e}")
+                failed.append({"asin": asin, "error": str(e)})
 
             with _jobs_lock:
                 _jobs[job_id]["done"] = i + 1
@@ -113,7 +122,10 @@ def _run_bulk_job(job_id: str, asins: List[str], marketplace: str):
         with _jobs_lock:
             _jobs[job_id]["error"] = str(e)
     finally:
-        db.close()
+        try:
+            db.close()
+        except Exception as e:
+            logger.error(f"[job {job_id}] Error closing DB: {e}")
 
     with _jobs_lock:
         _jobs[job_id]["status"] = "done"
@@ -543,41 +555,56 @@ def bulk_lookup(req: BulkASINRequest, db: Session = Depends(get_db)):
 @app.post("/api/buybox/bulk-start")
 def bulk_start(req: BulkASINRequest):
     """Start a background bulk scrape job. Returns a job_id to poll for progress."""
-    asin_pattern = re.compile(r'^[A-Z0-9]{10}$')
-    asins = [a.strip().upper() for a in req.asins if a.strip()]
-    asins = [a for a in asins if asin_pattern.match(a)]
-    if not asins:
-        raise HTTPException(status_code=400, detail="No valid ASINs provided")
+    try:
+        asin_pattern = re.compile(r'^[A-Z0-9]{10}$')
+        asins = [a.strip().upper() for a in req.asins if a.strip()]
+        asins = [a for a in asins if asin_pattern.match(a)]
+        
+        logger.info(f"Bulk start received {len(asins)} valid ASINs from {len(req.asins)} inputs")
+        
+        if not asins:
+            raise HTTPException(status_code=400, detail="No valid ASINs provided")
 
-    job_id = str(uuid.uuid4())
-    with _jobs_lock:
-        _jobs[job_id] = {
-            "job_id": job_id,
-            "status": "queued",
-            "total": len(asins),
-            "done": 0,
-            "results": [],
-            "failed": [],
-            "marketplace": req.marketplace,
-            "started_at": datetime.now().isoformat(),
-            "finished_at": None,
-            "error": None,
-        }
+        job_id = str(uuid.uuid4())
+        with _jobs_lock:
+            _jobs[job_id] = {
+                "job_id": job_id,
+                "status": "queued",
+                "total": len(asins),
+                "done": 0,
+                "results": [],
+                "failed": [],
+                "marketplace": req.marketplace,
+                "started_at": datetime.now().isoformat(),
+                "finished_at": None,
+                "error": None,
+            }
 
-    t = threading.Thread(target=_run_bulk_job, args=(job_id, asins, req.marketplace), daemon=True)
-    t.start()
-    logger.info(f"Started bulk job {job_id} for {len(asins)} ASINs")
-    return {"job_id": job_id, "total": len(asins), "status": "queued"}
+        t = threading.Thread(target=_run_bulk_job, args=(job_id, asins, req.marketplace), daemon=True)
+        t.start()
+        logger.info(f"Started bulk job {job_id} for {len(asins)} ASINs")
+        return {"job_id": job_id, "total": len(asins), "status": "queued"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Bulk start error: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to start bulk job: {str(e)}")
 
 
 @app.get("/api/buybox/bulk-status/{job_id}")
 def bulk_status(job_id: str):
     """Poll the status of a background bulk scrape job."""
-    with _jobs_lock:
-        job = _jobs.get(job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-    return job
+    try:
+        with _jobs_lock:
+            job = _jobs.get(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+        return job
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Bulk status error for job {job_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get job status: {str(e)}")
 
 
 @app.post("/api/buybox/bulk-add")
