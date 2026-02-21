@@ -20,7 +20,7 @@ from bs4 import BeautifulSoup
 from loguru import logger
 from database import init_db, get_db, save_asin, save_price_history, get_all_asins, get_price_history, delete_asin, TrackedASIN, PriceHistory
 try:
-    from alerts import send_whatsapp_alert, load_alert_settings, save_alert_settings
+    from alerts import send_whatsapp_alert, send_telegram_alert, load_alert_settings, save_alert_settings
     from scheduler import start_scheduler, stop_scheduler, get_scheduler_status, update_scheduler_interval, refresh_all_asins
     SCHEDULER_AVAILABLE = True
     logger.info("Scheduler and alerts modules loaded successfully")
@@ -364,11 +364,17 @@ def get_amazon_buybox(asin: str, marketplace: str = "amazon.co.za") -> dict:
 
 @app.on_event("startup")
 def startup_event():
-    init_db()
-    logger.info("Database initialized on startup")
+    try:
+        init_db()
+        logger.info("Database initialized on startup")
+    except Exception as e:
+        logger.error(f"Startup DB init error (app will still start): {e}")
     if SCHEDULER_AVAILABLE:
-        start_scheduler()
-        logger.info("Scheduler started")
+        try:
+            start_scheduler()
+            logger.info("Scheduler started")
+        except Exception as e:
+            logger.error(f"Scheduler failed to start: {e}")
 
 @app.on_event("shutdown")
 def shutdown_event():
@@ -531,6 +537,22 @@ def test_whatsapp():
         message="Test alert from your Amazon Buybox Tracker! Alerts are working correctly."
     )
     return {"success": success, "message": "Test alert sent!" if success else "Failed to send alert"}
+
+@app.post("/api/alerts/test-telegram")
+def test_telegram():
+    if not SCHEDULER_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Alerts module not available")
+    settings = load_alert_settings()
+    bot_token = settings.get("telegram_bot_token")
+    chat_id = settings.get("telegram_chat_id")
+    if not bot_token or not chat_id:
+        raise HTTPException(status_code=400, detail="TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are required")
+    success = send_telegram_alert(
+        bot_token=bot_token,
+        chat_id=chat_id,
+        message="🤖 <b>Test alert</b> from your Amazon Buybox Tracker!\n\nTelegram alerts are working correctly ✅"
+    )
+    return {"success": success, "message": "Telegram test sent!" if success else "Failed to send Telegram alert"}
 
 @app.get("/api/scheduler/status")
 def scheduler_status():

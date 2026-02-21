@@ -1,5 +1,8 @@
-﻿"""
+"""
 Auto-refresh scheduler using Python built-in threading - no extra dependencies
+
+NOTE on Render.com: scheduler_settings.json won't persist across restarts.
+Set SCHEDULER_INTERVAL_HOURS and SCHEDULER_ENABLED as Render env vars instead.
 """
 import os
 import json
@@ -16,17 +19,31 @@ _enabled = True
 _next_run = None
 
 def load_scheduler_settings() -> dict:
+    """Load scheduler settings: env vars first, then file override."""
+    try:
+        default_interval = float(os.getenv("SCHEDULER_INTERVAL_HOURS", "6.0"))
+    except ValueError:
+        default_interval = 6.0
+    enabled_env = os.getenv("SCHEDULER_ENABLED", "true").lower()
+    default_enabled = enabled_env not in ("false", "0", "no")
+
+    defaults = {"interval_hours": default_interval, "enabled": default_enabled}
+
     if os.path.exists(SCHEDULER_FILE):
         try:
             with open(SCHEDULER_FILE, "r") as f:
-                return json.load(f)
+                defaults.update(json.load(f))
         except Exception:
             pass
-    return {"interval_hours": 6.0, "enabled": True}
+    return defaults
 
 def save_scheduler_settings(settings: dict):
-    with open(SCHEDULER_FILE, "w") as f:
-        json.dump(settings, f, indent=2)
+    """Save to file (runtime cache only - resets on Render restart)."""
+    try:
+        with open(SCHEDULER_FILE, "w") as f:
+            json.dump(settings, f, indent=2)
+    except Exception as e:
+        logger.error(f"Could not save scheduler settings: {e}")
 
 def refresh_all_asins(db=None):
     global _last_run, _next_run, _interval_hours, _enabled, _timer

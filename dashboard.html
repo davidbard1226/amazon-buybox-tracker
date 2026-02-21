@@ -270,6 +270,8 @@ tr:hover td{background:rgba(255,255,255,0.02);}
       </table>
     </div>
   </div>
+</div>
+
 <!-- SETTINGS PAGE -->
 <div id="page-settings" class="page">
   <div class="card">
@@ -313,6 +315,36 @@ tr:hover td{background:rgba(255,255,255,0.02);}
       <button class="btn" style="background:#1e293b;border:1px solid #334155;color:#e2e8f0;" onclick="testWhatsApp()">📤 Send Test Message</button>
     </div>
     <div id="alertSettingsMsg" style="margin-top:12px;"></div>
+  </div>
+
+  <div class="card">
+    <h2>💬 Telegram Alerts (Free &amp; Instant)</h2>
+    <p style="color:#94a3b8;margin-bottom:18px;font-size:1rem;">Get Telegram messages when you lose or win the buybox. Uses the free Telegram Bot API — no third-party service needed.</p>
+    <div style="background:#1a2e44;border:1px solid #2563eb;border-radius:8px;padding:16px;margin-bottom:20px;font-size:0.95rem;color:#93c5fd;">
+      <b>📋 Setup Instructions:</b><br><br>
+      1. Open Telegram and search for <b>@BotFather</b><br>
+      2. Send <b>/newbot</b> and follow the prompts — BotFather will give you a <b>Bot Token</b><br>
+      3. Start a chat with your new bot (or add it to a group)<br>
+      4. Visit <b>https://api.telegram.org/bot&lt;YOUR_TOKEN&gt;/getUpdates</b> in your browser — find the <b>"id"</b> value inside the <b>"chat"</b> object — that's your Chat ID<br>
+      5. Enter the token and chat ID below and click Save, then Test
+    </div>
+    <div class="form-row" style="margin-bottom:16px;">
+      <div class="form-group" style="flex:1;">
+        <label>Bot Token (from @BotFather)</label>
+        <input type="text" id="tgBotToken" placeholder="123456789:ABCdefGHIjklMNOpqrSTUvwxYZ" />
+      </div>
+      <div class="form-group" style="flex:1;">
+        <label>Chat ID (your personal or group chat)</label>
+        <input type="text" id="tgChatId" placeholder="123456789 or -100123456789 for groups" />
+        <button class="btn" style="margin-top:8px;background:#0f172a;border:1px solid #2563eb;color:#93c5fd;font-size:13px;padding:6px 14px;" onclick="fetchTelegramChatId()">🔍 Auto-Detect Chat ID</button>
+        <div id="tgChatIdMsg" style="margin-top:6px;font-size:0.85rem;color:#94a3b8;">Paste your Bot Token above, send <b>/start</b> to your bot in Telegram, then click Auto-Detect.</div>
+      </div>
+    </div>
+    <div style="display:flex;gap:12px;">
+      <button class="btn btn-primary" onclick="saveAlertSettings()">💾 Save Settings</button>
+      <button class="btn" style="background:#1e293b;border:1px solid #2563eb;color:#93c5fd;" onclick="testTelegram()">📤 Send Test Telegram</button>
+    </div>
+    <div id="telegramSettingsMsg" style="margin-top:12px;"></div>
   </div>
 
   <div class="card">
@@ -370,6 +402,7 @@ function showPage(name) {
   event.target.classList.add('active');
   if (name === 'dashboard') loadDashboard();
   if (name === 'analytics') loadAnalytics();
+  if (name === 'settings') loadSettings();
 }
 
 // ── Health Check ─────────────────────────────────────────────────
@@ -773,6 +806,8 @@ async function loadSettings() {
     const d = await r.json();
     if (d.whatsapp_phone) document.getElementById('waPhone').value = d.whatsapp_phone;
     if (d.callmebot_apikey) document.getElementById('waApiKey').value = d.callmebot_apikey;
+    if (d.telegram_bot_token) document.getElementById('tgBotToken').value = d.telegram_bot_token;
+    if (d.telegram_chat_id) document.getElementById('tgChatId').value = d.telegram_chat_id;
     if (d.alert_losing !== undefined) document.getElementById('alertLosing').checked = d.alert_losing;
     if (d.alert_winning !== undefined) document.getElementById('alertWinning').checked = d.alert_winning;
     if (d.alert_amazon !== undefined) document.getElementById('alertAmazon').checked = d.alert_amazon;
@@ -809,6 +844,8 @@ async function saveAlertSettings() {
   const settings = {
     whatsapp_phone: document.getElementById('waPhone').value.trim(),
     callmebot_apikey: document.getElementById('waApiKey').value.trim(),
+    telegram_bot_token: document.getElementById('tgBotToken').value.trim(),
+    telegram_chat_id: document.getElementById('tgChatId').value.trim(),
     alert_losing: document.getElementById('alertLosing').checked,
     alert_winning: document.getElementById('alertWinning').checked,
     alert_amazon: document.getElementById('alertAmazon').checked,
@@ -817,8 +854,55 @@ async function saveAlertSettings() {
     const r = await fetch(API + '/api/alerts/settings', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(settings) });
     const d = await r.json();
     showAlert('alertSettingsMsg', '✅ Alert settings saved successfully!', 'success');
+    showAlert('telegramSettingsMsg', '✅ Settings saved!', 'success');
   } catch(e) {
     showAlert('alertSettingsMsg', '❌ Failed to save settings', 'error');
+    showAlert('telegramSettingsMsg', '❌ Failed to save settings', 'error');
+  }
+}
+
+async function fetchTelegramChatId() {
+  const token = document.getElementById('tgBotToken').value.trim();
+  if (!token) {
+    document.getElementById('tgChatIdMsg').innerHTML = '<span style="color:#ef4444;">⚠️ Please paste your Bot Token first</span>';
+    return;
+  }
+  document.getElementById('tgChatIdMsg').innerHTML = '<span style="color:#93c5fd;">🔍 Detecting your Chat ID...</span>';
+  try {
+    const r = await fetch(`https://api.telegram.org/bot${token}/getUpdates`);
+    const d = await r.json();
+    if (!d.ok) {
+      document.getElementById('tgChatIdMsg').innerHTML = '<span style="color:#ef4444;">❌ Invalid Bot Token. Double-check it from @BotFather.</span>';
+      return;
+    }
+    if (!d.result || d.result.length === 0) {
+      document.getElementById('tgChatIdMsg').innerHTML = '<span style="color:#f97316;">⚠️ No messages found. Open Telegram, find your bot, and send it <b>/start</b> — then click Auto-Detect again.</span>';
+      return;
+    }
+    const msg = d.result[d.result.length - 1];
+    const chatId = msg.message?.chat?.id || msg.channel_post?.chat?.id;
+    const chatName = msg.message?.chat?.first_name || msg.message?.chat?.title || msg.channel_post?.chat?.title || 'your chat';
+    if (chatId) {
+      document.getElementById('tgChatId').value = chatId;
+      document.getElementById('tgChatIdMsg').innerHTML = `<span style="color:#10b981;">✅ Chat ID detected: <b>${chatId}</b> (${chatName}). Click Save Settings to keep it.</span>`;
+    } else {
+      document.getElementById('tgChatIdMsg').innerHTML = '<span style="color:#ef4444;">❌ Could not read Chat ID. Try sending /start to your bot again.</span>';
+    }
+  } catch(e) {
+    document.getElementById('tgChatIdMsg').innerHTML = '<span style="color:#ef4444;">❌ Error: ' + e.message + '</span>';
+  }
+}
+
+async function testTelegram() {
+  showAlert('telegramSettingsMsg', '📤 Sending test Telegram message...', 'info');
+  // Save current values first so the backend has them
+  await saveAlertSettings();
+  try {
+    const r = await fetch(API + '/api/alerts/test-telegram', { method:'POST' });
+    const d = await r.json();
+    showAlert('telegramSettingsMsg', d.success ? '✅ Test Telegram message sent! Check your chat.' : '❌ Failed: ' + (d.detail || d.message || 'Unknown error'), d.success ? 'success' : 'error');
+  } catch(e) {
+    showAlert('telegramSettingsMsg', '❌ Error: ' + e.message, 'error');
   }
 }
 
@@ -858,13 +942,6 @@ async function runNow() {
   } catch(e) {
     showAlert('schedulerMsg', '❌ Failed to trigger refresh', 'error');
   }
-}
-
-// Update showPage to load settings
-const _origShowPage = showPage;
-function showPage(name) {
-  _origShowPage(name);
-  if (name === 'settings') loadSettings();
 }
 
 // ── Init ──────────────────────────────────────────────────────────

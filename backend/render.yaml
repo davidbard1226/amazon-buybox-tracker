@@ -6,7 +6,61 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.0"
+
+      # Your Amazon seller name (must match exactly as shown on Amazon)
       - key: MY_SELLER_NAME
         value: Bonolo Online
-      - key: PYTHON_VERSION
-        value: 3.11.0
+
+      # -----------------------------------------------------------------------
+      # DATABASE - Supabase Session Pooler URL (IPv4-safe for Render.com)
+      # -----------------------------------------------------------------------
+      # IMPORTANT: Do NOT use the "Direct connection" URL (port 5432) - it uses
+      # IPv6 which Render free tier doesn't support.
+      # Instead use the SESSION POOLER URL (port 6543):
+      #   Supabase → Project Settings → Database → Connection pooling
+      #   → Mode: Session → Copy the URI (it uses port 6543)
+      # Format: postgresql://postgres.[ref]:[password]@aws-0-[region].pooler.supabase.com:6543/postgres
+      - key: DATABASE_URL
+        sync: false   # Set this manually in the Render dashboard (keep it secret)
+
+      # -----------------------------------------------------------------------
+      # WHATSAPP ALERTS via CallMeBot (free service)
+      # -----------------------------------------------------------------------
+      # Step 1: Add +34 644 59 78 38 to your WhatsApp contacts as "CallMeBot"
+      # Step 2: Send this message to that contact:
+      #         I allow callmebot to send me messages
+      # Step 3: You'll receive your API key via WhatsApp
+      # Step 4: Set the env vars below in Render dashboard
+      - key: WHATSAPP_PHONE
+        sync: false   # Your number with country code e.g. +27821234567
+      - key: CALLMEBOT_APIKEY
+        sync: false   # The API key you received from CallMeBot
+
+      # -----------------------------------------------------------------------
+      # TELEGRAM ALERTS via Telegram Bot API (free, no extra libraries needed)
+      # -----------------------------------------------------------------------
+      # Step 1: Open Telegram and search for @BotFather
+      # Step 2: Send /newbot and follow the prompts
+      #         BotFather will reply with your bot token (looks like 123456:ABC-DEF...)
+      # Step 3: Start a chat with your new bot (or add it to a group/channel)
+      # Step 4: Get your chat ID by visiting:
+      #         https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates
+      #         Look for "id" inside the "chat" object in the JSON response
+      #         For a group/channel the ID will be negative (e.g. -100123456789)
+      # Step 5: Set the two env vars below in the Render dashboard
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false   # Token from @BotFather e.g. 123456789:ABC-DEFghiJKL...
+      - key: TELEGRAM_CHAT_ID
+        sync: false   # Your personal chat ID or group/channel ID
+
+      # -----------------------------------------------------------------------
+      # ALERT TOGGLES  (apply to BOTH WhatsApp and Telegram - all default true)
+      # -----------------------------------------------------------------------
+      - key: ALERT_LOSING
+        value: "true"   # Alert when you lose the buybox
+      - key: ALERT_WINNING
+        value: "true"   # Alert when you win the buybox
+      - key: ALERT_AMAZON
+        value: "true"   # Alert when Amazon takes the buybox

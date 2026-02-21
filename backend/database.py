@@ -17,10 +17,35 @@ DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./buybox_tracker.db")
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
+# ============================================================================
+# Supabase on Render.com: the direct connection (port 5432) uses IPv6 which
+# Render's free tier does NOT support → use the session pooler (port 6543)
+# which is IPv4-compatible. We auto-rewrite the URL if needed.
+# In your Supabase dashboard go to:
+#   Project Settings → Database → Connection pooling → Session mode → port 6543
+# Copy that connection string and set it as DATABASE_URL on Render.
+# ============================================================================
+if "supabase.co" in DATABASE_URL and ":5432/" in DATABASE_URL:
+    DATABASE_URL = DATABASE_URL.replace(":5432/", ":6543/")
+    logger.warning("Supabase direct port 5432 detected – auto-switching to pooler port 6543 (IPv4-safe for Render.com)")
+
 logger.info(f"Using database: {DATABASE_URL.split('@')[-1] if '@' in DATABASE_URL else DATABASE_URL}")
 
 connect_args = {"check_same_thread": False} if "sqlite" in DATABASE_URL else {}
-engine = create_engine(DATABASE_URL, connect_args=connect_args)
+
+# For PostgreSQL via Supabase pooler, disable pre-ping and use conservative pool settings
+if "sqlite" in DATABASE_URL:
+    engine = create_engine(DATABASE_URL, connect_args=connect_args)
+else:
+    engine = create_engine(
+        DATABASE_URL,
+        connect_args=connect_args,
+        pool_pre_ping=True,
+        pool_size=2,
+        max_overflow=3,
+        pool_timeout=30,
+        pool_recycle=300,
+    )
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
@@ -65,9 +90,15 @@ class PriceHistory(Base):
 # ============================================================================
 
 def init_db():
-    """Create all tables if they don't exist."""
-    Base.metadata.create_all(bind=engine)
-    logger.info("Database tables initialized")
+    """Create all tables if they don't exist. Gracefully handles connection errors."""
+    try:
+        Base.metadata.create_all(bind=engine)
+        logger.info("Database tables initialized")
+    except Exception as e:
+        logger.error(f"Database initialization failed: {e}")
+        logger.error("⚠️  The app will start but data won't be saved until the DB is reachable.")
+        logger.error("Fix: Set DATABASE_URL on Render to the Supabase SESSION POOLER URL (port 6543, not 5432).")
+        logger.error("In Supabase: Project Settings → Database → Connection pooling → Session mode → copy URI")
 
 
 def get_db():
