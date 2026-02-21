@@ -8,6 +8,8 @@ import random
 import os
 import re
 import requests
+import threading
+import uuid
 from datetime import datetime
 from typing import List, Optional, Dict
 from fastapi import FastAPI, HTTPException, Depends
@@ -18,7 +20,7 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from bs4 import BeautifulSoup
 from loguru import logger
-from database import init_db, get_db, save_asin, save_price_history, get_all_asins, get_price_history, delete_asin, TrackedASIN, PriceHistory
+from database import init_db, get_db, save_asin, save_price_history, get_all_asins, get_price_history, delete_asin, TrackedASIN, PriceHistory, SessionLocal
 try:
     from alerts import send_whatsapp_alert, send_telegram_alert, load_alert_settings, save_alert_settings
     from scheduler import start_scheduler, stop_scheduler, get_scheduler_status, update_scheduler_interval, refresh_all_asins
@@ -64,6 +66,60 @@ class BulkASINRequest(BaseModel):
 class BulkURLRequest(BaseModel):
     urls: List[str]
     marketplace: str = "amazon.co.za"
+
+# ============================================================================
+# Background Job Store (in-memory, survives for the lifetime of the process)
+# ============================================================================
+
+# job_id -> { status, total, done, results, failed, started_at, finished_at }
+_jobs: Dict[str, dict] = {}
+_jobs_lock = threading.Lock()
+
+
+def _run_bulk_job(job_id: str, asins: List[str], marketplace: str):
+    """Scrape ASINs in a background thread, updating job status as we go."""
+    with _jobs_lock:
+        _jobs[job_id]["status"] = "running"
+
+    results = []
+    failed = []
+
+    # Use a dedicated DB session for this thread
+    db = SessionLocal()
+    try:
+        for i, asin in enumerate(asins):
+            data = scrape_with_retry(asin, marketplace)
+            save_asin(db, data)
+            if data.get("status") == "success":
+                save_price_history(db, data)
+                results.append(data)
+            else:
+                failed.append({"asin": asin, "error": data.get("error", "Unknown error")})
+
+            with _jobs_lock:
+                _jobs[job_id]["done"] = i + 1
+                _jobs[job_id]["results"] = results[:]
+                _jobs[job_id]["failed"] = failed[:]
+
+            # Progressive delay: longer cooldown every 10 products
+            if (i + 1) % 10 == 0 and (i + 1) < len(asins):
+                wait = random.uniform(10, 20)
+                logger.info(f"[job {job_id}] Processed {i+1}/{len(asins)}, cooling down {wait:.1f}s...")
+                time.sleep(wait)
+            elif (i + 1) < len(asins):
+                time.sleep(random.uniform(2, 4))
+    except Exception as e:
+        logger.error(f"[job {job_id}] Unexpected error: {e}")
+        with _jobs_lock:
+            _jobs[job_id]["error"] = str(e)
+    finally:
+        db.close()
+
+    with _jobs_lock:
+        _jobs[job_id]["status"] = "done"
+        _jobs[job_id]["finished_at"] = datetime.now().isoformat()
+
+    logger.info(f"[job {job_id}] Finished: {len(results)} ok, {len(failed)} failed")
 
 # ============================================================================
 # Amazon Scraper
@@ -482,6 +538,46 @@ def bulk_lookup(req: BulkASINRequest, db: Session = Depends(get_db)):
             time.sleep(random.uniform(3, 6))
     logger.info(f"Bulk scrape done: {len(results)} success, {len(failed)} failed")
     return {"results": results, "count": len(results), "failed": failed, "failed_count": len(failed)}
+
+
+@app.post("/api/buybox/bulk-start")
+def bulk_start(req: BulkASINRequest):
+    """Start a background bulk scrape job. Returns a job_id to poll for progress."""
+    asin_pattern = re.compile(r'^[A-Z0-9]{10}$')
+    asins = [a.strip().upper() for a in req.asins if a.strip()]
+    asins = [a for a in asins if asin_pattern.match(a)]
+    if not asins:
+        raise HTTPException(status_code=400, detail="No valid ASINs provided")
+
+    job_id = str(uuid.uuid4())
+    with _jobs_lock:
+        _jobs[job_id] = {
+            "job_id": job_id,
+            "status": "queued",
+            "total": len(asins),
+            "done": 0,
+            "results": [],
+            "failed": [],
+            "marketplace": req.marketplace,
+            "started_at": datetime.now().isoformat(),
+            "finished_at": None,
+            "error": None,
+        }
+
+    t = threading.Thread(target=_run_bulk_job, args=(job_id, asins, req.marketplace), daemon=True)
+    t.start()
+    logger.info(f"Started bulk job {job_id} for {len(asins)} ASINs")
+    return {"job_id": job_id, "total": len(asins), "status": "queued"}
+
+
+@app.get("/api/buybox/bulk-status/{job_id}")
+def bulk_status(job_id: str):
+    """Poll the status of a background bulk scrape job."""
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job
 
 
 @app.post("/api/buybox/bulk-add")
