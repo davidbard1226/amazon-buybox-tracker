@@ -21,7 +21,7 @@ console.log('🚀 Amazon Buybox Tracker Extension Loaded v1.1.0');
 
         // If seller unknown, click AOD and wait
         if (!data.seller || data.seller === 'Unknown') {
-          const clicked = await clickSeeAllBuyingOptions();
+          const clicked = await openAODPanel();
           if (clicked) {
             await new Promise(r => setTimeout(r, 2500));
             data = scrapeProductPage(mySellerName);
