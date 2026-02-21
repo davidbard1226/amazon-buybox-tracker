@@ -23,7 +23,7 @@ from sqlalchemy import text
 from pydantic import BaseModel
 from bs4 import BeautifulSoup
 from loguru import logger
-from database import init_db, get_db, save_asin, save_price_history, get_all_asins, get_price_history, delete_asin, TrackedASIN, PriceHistory, SessionLocal
+from database import init_db, get_db, save_asin, save_price_history, get_all_asins, get_price_history, delete_asin, TrackedASIN, PriceHistory, SessionLocal, engine
 try:
     from alerts import send_whatsapp_alert, send_telegram_alert, load_alert_settings, save_alert_settings
     from scheduler import start_scheduler, stop_scheduler, get_scheduler_status, update_scheduler_interval, refresh_all_asins
