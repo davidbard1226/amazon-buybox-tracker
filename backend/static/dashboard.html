@@ -833,7 +833,11 @@ function _renderBulkProgress(job) {
     </div>`;
 }
 
-// ── Bulk Upload — via Chrome Extension (open tabs) ───────────────
+// ── Bulk Upload — Concurrent Pool via Chrome Extension ───────────
+// Max CONCURRENT_TABS tabs open at once — when one closes (after scraping)
+// the next one opens automatically. Handles 2200+ ASINs safely.
+const CONCURRENT_TABS = 10;
+
 async function submitBulk() {
   const raw = document.getElementById('bulkInput').value.trim();
   const market = document.getElementById('bulkMarket').value;
@@ -843,32 +847,91 @@ async function submitBulk() {
   if (asins.length === 0) { showAlert('bulkAlert','⚠️ No valid ASINs found (10-character codes like B01ARH3Q5G)','error'); return; }
 
   const btn = document.getElementById('bulkBtn');
-  btn.disabled = true; btn.innerHTML = '<span class="loading"></span>Opening tabs...';
-  showAlert('bulkAlert', `<span class="loading"></span>Opening ${asins.length} Amazon tabs — Chrome Extension will scrape each one automatically (3s apart)...`, 'info');
+  btn.disabled = true;
+  btn.innerHTML = `<span class="loading"></span>Running pool (${CONCURRENT_TABS} tabs)...`;
+  showAlert('bulkAlert', `<span class="loading"></span>Starting concurrent pool — ${CONCURRENT_TABS} tabs open at a time for ${asins.length} ASINs...`, 'info');
   document.getElementById('bulkResult').innerHTML = '';
   _stopBulkPoll();
 
-  // Snapshot old scraped_at for all ASINs so we can detect new scrapes
+  const domain = market.replace('www.','');
   const oldScrapedAts = {};
   allProducts.forEach(p => { oldScrapedAts[p.asin] = p.scraped_at; });
 
-  const domain = market.replace('www.','');
-  let opened = 0;
+  // Queue state
+  let queueIdx = 0;         // next ASIN index to open
+  let activeCount = 0;      // tabs currently open
+  let doneAsins = [];
+  let failedAsins = [];
+  let finished = false;
 
-  // Open tabs one at a time with 4s delay — gives each tab time to start loading
-  // before the next one opens, reducing browser/Amazon throttling
-  const openNext = () => {
-    if (opened >= asins.length) {
-      showAlert('bulkAlert', `⏳ All ${asins.length} tabs opened. Extension is scraping each one and closing automatically. Dashboard updates as each completes...`, 'info');
-      _startBulkExtensionPoll(asins, oldScrapedAts, btn);
-      return;
+  // Snapshot current scraped_at from backend for all queued ASINs
+  let latestScrapedAts = {...oldScrapedAts};
+
+  // Poll backend every 4s to detect completed scrapes
+  // When scraped_at changes for an ASIN → mark done → open next tab
+  _bulkPollTimer = setInterval(async () => {
+    try {
+      const r = await fetch(API + '/api/buybox/tracked');
+      const d = await r.json();
+      const products = d.asins || [];
+
+      // Check each product in the current batch for new scrapes
+      products.forEach(p => {
+        if (!asins.includes(p.asin)) return;
+        if (doneAsins.includes(p.asin) || failedAsins.find(f=>f.asin===p.asin)) return;
+        const oldAt = latestScrapedAts[p.asin];
+        if (p.scraped_at && p.scraped_at !== oldAt) {
+          // New scrape detected!
+          latestScrapedAts[p.asin] = p.scraped_at;
+          doneAsins.push(p.asin);
+          activeCount = Math.max(0, activeCount - 1);
+          // Update local products
+          const idx = allProducts.findIndex(x => x.asin === p.asin);
+          if (idx >= 0) allProducts[idx] = p; else allProducts.push(p);
+          // Open next tab from queue
+          openNextTab();
+        }
+      });
+
+      // Update progress display
+      _renderBulkExtensionProgress(doneAsins.length + failedAsins.length, asins.length, doneAsins, failedAsins);
+      updateStats(); renderTable();
+
+      // Check if all done
+      if (doneAsins.length + failedAsins.length >= asins.length && !finished) {
+        finished = true;
+        _stopBulkPoll();
+        btn.disabled = false; btn.innerHTML = '🚀 Fetch All via Extension';
+        const winCount = allProducts.filter(p=>asins.includes(p.asin)&&p.buybox_status==='winning').length;
+        const loseCount = allProducts.filter(p=>asins.includes(p.asin)&&p.buybox_status==='losing').length;
+        const azCount = allProducts.filter(p=>asins.includes(p.asin)&&p.buybox_status==='amazon').length;
+        showAlert('bulkAlert', `✅ Done! ${doneAsins.length}/${asins.length} scraped — 🏆 ${winCount} winning · 😞 ${loseCount} losing · 🛒 ${azCount} Amazon`, 'success');
+      }
+    } catch(e) {}
+  }, 4000);
+
+  // Timeout watcher — if an ASIN takes >45s mark it failed and open next
+  const timeouts = {};
+  function markTimeout(asin) {
+    if (doneAsins.includes(asin) || failedAsins.find(f=>f.asin===asin)) return;
+    failedAsins.push({asin, error:'Timeout (45s)'});
+    activeCount = Math.max(0, activeCount - 1);
+    openNextTab();
+  }
+
+  function openNextTab() {
+    // Fill up to CONCURRENT_TABS
+    while (activeCount < CONCURRENT_TABS && queueIdx < asins.length) {
+      const asin = asins[queueIdx++];
+      activeCount++;
+      window.open(`https://www.${domain}/dp/${asin}?auto_scrape=1&dashboard=${encodeURIComponent(window.location.origin)}`, '_blank');
+      // Set 45s timeout for this tab
+      timeouts[asin] = setTimeout(() => markTimeout(asin), 45000);
     }
-    const asin = asins[opened++];
-    window.open(`https://www.${domain}/dp/${asin}?auto_scrape=1&dashboard=${encodeURIComponent(window.location.origin)}`, '_blank');
-    _renderBulkExtensionProgress(opened, asins.length, [], []);
-    setTimeout(openNext, 4000); // 4s between tabs
-  };
-  openNext();
+  }
+
+  // Kick off initial batch
+  openNextTab();
 }
 
 function _renderBulkExtensionProgress(opened, total, done, failed) {
