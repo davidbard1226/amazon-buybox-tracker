@@ -51,9 +51,9 @@ services:
       #         For a group/channel the ID will be negative (e.g. -100123456789)
       # Step 5: Set the two env vars below in the Render dashboard
       - key: TELEGRAM_BOT_TOKEN
-        sync: false   # Token from @BotFather e.g. 123456789:ABC-DEFghiJKL...
+        value: "8333571843:AAHHGHnf2V5A8zKDzvAT88FSCoKx_rECy1Q"
       - key: TELEGRAM_CHAT_ID
-        sync: false   # Your personal chat ID or group/channel ID
+        value: "8592312699"
 
       # -----------------------------------------------------------------------
       # ALERT TOGGLES  (apply to BOTH WhatsApp and Telegram - all default true)
