@@ -8,47 +8,57 @@ console.log('🚀 Amazon Buybox Tracker Extension Loaded v1.1.0');
   const params = new URLSearchParams(window.location.search);
   if (params.get('auto_scrape') !== '1') return;
 
-  // Wait for page to fully load before scraping
+  // Prevent double-scrape if page reloads (e.g. Amazon redirect)
+  if (sessionStorage.getItem('_buybox_scraped')) return;
+
   const runAutoScrape = () => {
     chrome.storage.sync.get(['mySellerName', 'backendUrl'], async (items) => {
       const mySellerName = items.mySellerName || '';
       const backendUrl = (items.backendUrl || '').replace(/\/+$/, '');
-      if (!backendUrl) return; // No backend configured, skip
+      if (!backendUrl) {
+        // Tell background to close this tab even if no backend set
+        chrome.runtime.sendMessage({ action: 'closeTab' });
+        return;
+      }
+
+      // Mark as scraped to prevent re-scrape on reload
+      sessionStorage.setItem('_buybox_scraped', '1');
 
       try {
         // Try fast scrape first
         let data = scrapeProductPage(mySellerName);
 
-        // If seller unknown, click AOD and wait
+        // If seller unknown, click AOD panel and wait for it to render
         if (!data.seller || data.seller === 'Unknown') {
           const clicked = await openAODPanel();
           if (clicked) {
-            await new Promise(r => setTimeout(r, 2500));
+            await new Promise(r => setTimeout(r, 3000)); // wait for AOD panel
             data = scrapeProductPage(mySellerName);
           }
         }
 
         // Push to backend
-        await fetch(backendUrl + '/api/extension/scrape', {
+        const resp = await fetch(backendUrl + '/api/extension/scrape', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(data)
         });
 
-        console.log('✅ Auto-scrape complete for', data.asin, '— closing tab');
-        // Close this tab after successful scrape
-        window.close();
+        console.log('✅ Auto-scrape complete for', data.asin, 'status:', resp.status);
       } catch (e) {
         console.error('❌ Auto-scrape error:', e);
-        window.close();
+      } finally {
+        // Always close tab via background.js (window.close() blocked cross-origin)
+        setTimeout(() => chrome.runtime.sendMessage({ action: 'closeTab' }), 500);
       }
     });
   };
 
+  // Wait for full page load + extra time for dynamic content
   if (document.readyState === 'complete') {
-    setTimeout(runAutoScrape, 1500); // Give AOD time to load
+    setTimeout(runAutoScrape, 2000);
   } else {
-    window.addEventListener('load', () => setTimeout(runAutoScrape, 1500));
+    window.addEventListener('load', () => setTimeout(runAutoScrape, 2000));
   }
 })();
 

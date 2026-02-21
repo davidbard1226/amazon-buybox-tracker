@@ -7,6 +7,17 @@ console.log('🔧 Amazon Buybox Tracker Background Service Started v1.2.0');
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   console.log('📨 Background received:', request.action);
 
+  // Close the tab that sent this message (window.close() is blocked cross-origin)
+  if (request.action === 'closeTab') {
+    if (sender.tab && sender.tab.id) {
+      chrome.tabs.remove(sender.tab.id, () => {
+        console.log('✅ Closed auto-scrape tab:', sender.tab.id);
+      });
+    }
+    sendResponse({ success: true });
+    return true;
+  }
+
   if (request.action === 'sendToBackend') {
     handleSendToBackend(request.data)
       .then(response => sendResponse({ success: true, response }))

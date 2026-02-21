@@ -855,18 +855,18 @@ async function submitBulk() {
   const domain = market.replace('www.','');
   let opened = 0;
 
-  // Open tabs one at a time with 3s delay to avoid overwhelming Amazon/browser
+  // Open tabs one at a time with 4s delay — gives each tab time to start loading
+  // before the next one opens, reducing browser/Amazon throttling
   const openNext = () => {
     if (opened >= asins.length) {
-      showAlert('bulkAlert', `⏳ All ${asins.length} tabs opened. Extension is scraping each one. Dashboard will update automatically...`, 'info');
-      // Start polling to track progress
+      showAlert('bulkAlert', `⏳ All ${asins.length} tabs opened. Extension is scraping each one and closing automatically. Dashboard updates as each completes...`, 'info');
       _startBulkExtensionPoll(asins, oldScrapedAts, btn);
       return;
     }
     const asin = asins[opened++];
     window.open(`https://www.${domain}/dp/${asin}?auto_scrape=1&dashboard=${encodeURIComponent(window.location.origin)}`, '_blank');
     _renderBulkExtensionProgress(opened, asins.length, [], []);
-    setTimeout(openNext, 3000);
+    setTimeout(openNext, 4000); // 4s between tabs
   };
   openNext();
 }
@@ -914,7 +914,10 @@ function _startBulkExtensionPoll(asins, oldScrapedAts, btn) {
   const failed = [];
   const pending = new Set(asins);
   let pollCount = 0;
-  const maxPolls = 40; // 40 × 4s = 160s max wait
+  // Each tab: 4s open delay + 2s load + 3s AOD wait + 2s push = ~11s per ASIN
+  // Plus all tabs opened before poll starts: asins.length × 4s
+  // Max wait = (asins × 4s open) + (asins × 15s scrape) = asins × 19s + buffer
+  const maxPolls = Math.max(60, asins.length * 6); // at least 60 polls = 240s
 
   _bulkPollTimer = setInterval(async () => {
     pollCount++;
