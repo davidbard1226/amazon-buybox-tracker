@@ -1,0 +1,63 @@
+═══════════════════════════════════════════════════════════
+  AMAZON BUYBOX TRACKER - CHROME EXTENSION INSTALLATION
+═══════════════════════════════════════════════════════════
+
+⏱️ TIME: 3 Minutes
+🎯 RESULT: 100% Bot-Proof Amazon Scraping
+
+
+STEP 1: OPEN CHROME EXTENSIONS PAGE
+════════════════════════════════════════════════════════════
+1. Open Google Chrome browser
+2. Copy and paste this into address bar:
+   
+   chrome://extensions/
+
+3. Press Enter
+
+
+STEP 2: ENABLE DEVELOPER MODE
+════════════════════════════════════════════════════════════
+1. Look at the TOP RIGHT corner of the page
+2. Find the toggle switch labeled "Developer mode"
+3. Click it to turn it ON (should turn blue)
+
+
+STEP 3: LOAD THE EXTENSION
+════════════════════════════════════════════════════════════
+1. Click the "Load unpacked" button (top left area)
+2. A folder browser will open
+3. Navigate to this folder:
+
+   C:\webprojects\amazon-buybox-tracker\chrome-extension
+
+4. Click "Select Folder"
+
+✅ The extension is now installed!
+
+
+STEP 4: PIN THE EXTENSION (OPTIONAL BUT RECOMMENDED)
+════════════════════════════════════════════════════════════
+1. Click the puzzle piece icon 🧩 (top right of Chrome)
+2. Find "Amazon Buybox Tracker"
+3. Click the PIN icon 📌 next to it
+4. Now the extension icon will always be visible
+
+
+STEP 5: CONFIGURE YOUR API URL
+════════════════════════════════════════════════════════════
+⚠️ WAIT! Do this AFTER we deploy to Render (next step)
+
+1. Click the extension icon in Chrome toolbar
+2. Click "⚙️ Settings" tab
+3. Enter your Render URL (we'll get this next)
+4. Click "Save Settings"
+
+
+═══════════════════════════════════════════════════════════
+🎉 INSTALLATION COMPLETE!
+═══════════════════════════════════════════════════════════
+
+NEXT: Deploy backend to Render, then configure API URL
+
+═══════════════════════════════════════════════════════════
