@@ -549,42 +549,45 @@ function renderTable() {
 async function quickRefresh(asin, market) {
   showAlert('alertBox', `<span class="loading"></span>Opening ${asin} for auto-scrape — tab will close automatically...`, 'info');
 
+  // Record the old scraped_at so we detect when a NEW scrape comes in
+  const oldProduct = allProducts.find(p => p.asin === asin);
+  const oldScrapedAt = oldProduct ? oldProduct.scraped_at : null;
+
   // Build the Amazon product URL with ?auto_scrape=1 flag
-  const domain = market || 'amazon.co.za';
-  const productUrl = `https://www.${domain}/dp/${asin}?auto_scrape=1&dashboard=${encodeURIComponent(window.location.origin)}`;
+  const domain = (market || 'amazon.co.za').replace('www.', '');
+  const productUrl = `https://www.${domain}/dp/${asin}?auto_scrape=1`;
 
-  // Open tab — extension content.js will detect auto_scrape=1, scrape, push to backend, close tab
-  const newTab = window.open(productUrl, '_blank');
+  // Open tab — extension content.js detects auto_scrape=1, scrapes, pushes to backend, closes tab
+  window.open(productUrl, '_blank');
 
-  // Poll backend for updated data (extension pushes to /api/extension/scrape)
+  // Poll backend every 3s — detect when scraped_at changes (new scrape arrived)
   let attempts = 0;
-  const maxAttempts = 24; // 24 × 2.5s = 60s timeout
+  const maxAttempts = 20; // 20 × 3s = 60s timeout
   const poll = setInterval(async () => {
     attempts++;
     try {
       const r = await fetch(API + '/api/buybox/tracked');
       const d = await r.json();
       const updated = (d.asins || []).find(p => p.asin === asin);
-      if (updated && updated.scraped_at) {
-        const scrapeTime = new Date(updated.scraped_at).getTime();
-        const now = Date.now();
-        // If scraped in the last 60 seconds, it's fresh data
-        if (now - scrapeTime < 60000) {
+      if (updated) {
+        // Detect new scrape: scraped_at changed OR was null before and now has a value
+        const isNew = updated.scraped_at && updated.scraped_at !== oldScrapedAt;
+        if (isNew) {
           clearInterval(poll);
           const idx = allProducts.findIndex(p => p.asin === asin);
           if (idx >= 0) allProducts[idx] = updated; else allProducts.push(updated);
           updateStats(); renderTable();
-          showAlert('alertBox', `✅ ${asin} refreshed — Seller: ${updated.buybox_seller || 'Unknown'}, Price: ${updated.buybox_price ? 'R'+updated.buybox_price : 'N/A'}`, 'success');
-          try { if (newTab && !newTab.closed) newTab.close(); } catch(e) {}
+          const price = updated.buybox_price ? 'R' + Number(updated.buybox_price).toLocaleString('en-ZA', {minimumFractionDigits:2}) : 'N/A';
+          showAlert('alertBox', `✅ ${asin} refreshed — Seller: <b>${updated.buybox_seller || 'Unknown'}</b>, Price: <b>${price}</b>, Status: ${updated.buybox_status || 'unknown'}`, 'success');
           return;
         }
       }
     } catch(e) {}
     if (attempts >= maxAttempts) {
       clearInterval(poll);
-      showAlert('alertBox', `⚠️ Timeout waiting for ${asin}. Make sure the Chrome Extension is installed and enabled. The tab may still be loading.`, 'error');
+      showAlert('alertBox', `⚠️ Timeout for ${asin}. Make sure: 1) Extension is installed & enabled, 2) Backend URL is set in extension Settings tab, 3) Allow pop-ups for this site.`, 'error');
     }
-  }, 2500);
+  }, 3000);
 }
 
 async function refreshAll() {
@@ -613,40 +616,6 @@ async function removeASIN(asin) {
   await fetch(API + '/api/buybox/tracked/' + asin, {method:'DELETE'});
   allProducts = allProducts.filter(p => p.asin !== asin);
   updateStats(); renderTable();
-}
-
-async function refreshAll() {
-  if (!allProducts.length) { showAlert('alertBox', '⚠️ No products tracked yet.', 'error'); return; }
-  showAlert('alertBox', `<span class="loading"></span>Refreshing all ${allProducts.length} products via backend scheduler...`, 'info');
-  try {
-    // Trigger the backend scheduler to re-scrape all ASINs
-    const r = await fetch(API + '/api/scheduler/run-now', {method:'POST'});
-    if (r.ok) {
-      showAlert('alertBox', `⏳ Refresh triggered for ${allProducts.length} products. Dashboard will update in ~30 seconds. Click 🏠 Dashboard to reload.`, 'info');
-      // Auto-reload dashboard after 35 seconds
-      setTimeout(() => loadDashboard(), 35000);
-    } else {
-      throw new Error('Scheduler not available');
-    }
-  } catch(e) {
-    // Fallback: refresh one by one via backend
-    showAlert('alertBox', `<span class="loading"></span>Refreshing ${allProducts.length} products one by one...`, 'info');
-    let done = 0;
-    for (const p of allProducts) {
-      try {
-        const r = await fetch(API + '/api/buybox/lookup', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({asin:p.asin,marketplace:p.marketplace})});
-        const d = await r.json();
-        if (d.status !== 'blocked') {
-          const idx = allProducts.findIndex(x => x.asin === p.asin);
-          if (idx >= 0) allProducts[idx] = d;
-        }
-        done++;
-        showAlert('alertBox', `<span class="loading"></span>Refreshed ${done}/${allProducts.length}...`, 'info');
-      } catch(e2) {}
-    }
-    updateStats(); renderTable();
-    showAlert('alertBox', `✅ Refreshed ${done} of ${allProducts.length} products.`, 'success');
-  }
 }
 
 // ── Single Lookup ─────────────────────────────────────────────────
