@@ -393,13 +393,26 @@ def serve_dashboard():
     return FileResponse(index)
 
 @app.get("/api/health")
-def health(db: Session = Depends(get_db)):
-    count = db.query(TrackedASIN).count()
+def health():
+    db_status = "unknown"
+    count = 0
+    db_error = None
+    try:
+        db = next(get_db())
+        count = db.query(TrackedASIN).count()
+        db_status = "connected"
+        db.close()
+    except Exception as e:
+        db_status = "error"
+        db_error = str(e)
+        logger.error(f"Health check DB error: {e}")
     return {
-        "status": "healthy",
+        "status": "healthy" if db_status == "connected" else "degraded",
         "timestamp": datetime.now().isoformat(),
         "tracked_asins": count,
         "scheduler_available": SCHEDULER_AVAILABLE,
+        "database": db_status,
+        "database_error": db_error,
         "version": "2.0.0"
     }
 
