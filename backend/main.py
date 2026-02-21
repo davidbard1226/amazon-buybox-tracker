@@ -140,21 +140,44 @@ def _run_bulk_job(job_id: str, asins: List[str], marketplace: str):
 HEADERS_LIST = [
     {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept-Language": "en-GB,en-US;q=0.9,en;q=0.8",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+        "Cache-Control": "max-age=0",
+    },
+    {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15",
         "Accept-Language": "en-GB,en;q=0.9",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Encoding": "gzip, deflate, br",
         "Connection": "keep-alive",
         "Upgrade-Insecure-Requests": "1",
     },
     {
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
         "Accept-Language": "en-US,en;q=0.9",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Upgrade-Insecure-Requests": "1",
     },
     {
-        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0",
         "Accept-Language": "en-US,en;q=0.5",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+        "DNT": "1",
     }
 ]
 
@@ -193,8 +216,9 @@ def get_offer_listing_data(asin: str, marketplace: str = "amazon.co.za") -> dict
     logger.info(f"Fetching offer-listing page for ASIN: {asin}")
     
     try:
-        time.sleep(random.uniform(2, 4))  # Slightly longer delay for secondary page
-        response = requests.get(url, headers=headers, timeout=15)
+        session = requests.Session()
+        time.sleep(random.uniform(2.5, 4.5))  # Slightly longer delay for secondary page
+        response = session.get(url, headers=headers, timeout=15, allow_redirects=True)
         
         if response.status_code != 200:
             logger.warning(f"Offer-listing page returned {response.status_code} for {asin}")
@@ -232,26 +256,45 @@ def get_offer_listing_data(asin: str, marketplace: str = "amazon.co.za") -> dict
             if offscreen:
                 price = parse_price(offscreen.get_text(strip=True))
         
-        # Extract seller name
+        # Extract seller name - FIXED: More precise extraction
         seller = None
-        seller_link = first_offer.find("a", {"aria-label": lambda x: x and "seller" in x.lower()})
-        if not seller_link:
-            seller_link = first_offer.find("h3", {"class": "a-spacing-none olpSellerName"})
+        
+        # Method 1: Check for seller link/name in h3.olpSellerName
+        seller_h3 = first_offer.find("h3", {"class": "a-spacing-none olpSellerName"})
+        if seller_h3:
+            # Look for link first
+            seller_link = seller_h3.find("a")
             if seller_link:
-                seller_link = seller_link.find("a") or seller_link.find("span")
-        
-        if seller_link:
-            seller_text = seller_link.get_text(strip=True)
-            if re.search(r'amazon', seller_text, re.I):
-                seller = "Amazon.co.za"
-            else:
+                seller_text = seller_link.get_text(strip=True)
                 seller = seller_text
+            else:
+                # If no link, check for span or direct text
+                seller_span = seller_h3.find("span")
+                if seller_span:
+                    seller_text = seller_span.get_text(strip=True)
+                    seller = seller_text
+                else:
+                    seller_text = seller_h3.get_text(strip=True)
+                    if seller_text and seller_text != "Amazon.co.za":
+                        seller = seller_text
         
-        # Check if it's Amazon from other indicators
+        # Method 2: Look for merchant info in offer
+        if not seller:
+            merchant_link = first_offer.find("a", {"aria-label": lambda x: x and "seller" in x.lower()})
+            if merchant_link:
+                seller = merchant_link.get_text(strip=True)
+        
+        # Method 3: Check "Sold by" text patterns
         if not seller:
             offer_text = first_offer.get_text(" ", strip=True)
-            if re.search(r'amazon|ships from amazon|sold by amazon', offer_text, re.I):
+            # Only mark as Amazon if explicitly stated
+            if re.search(r'sold by amazon\.co\.za|ships from and sold by amazon', offer_text, re.I):
                 seller = "Amazon.co.za"
+            else:
+                # Try to extract seller from "Sold by X" pattern
+                sold_by_match = re.search(r'Sold by\s+([^\.\n]{2,50}?)(?:\s|$)', offer_text)
+                if sold_by_match:
+                    seller = sold_by_match.group(1).strip()
         
         if price and seller:
             logger.success(f"✅ Found from offer-listing: Price={price}, Seller={seller}")
@@ -274,10 +317,10 @@ def get_amazon_buybox(asin: str, marketplace: str = "amazon.co.za") -> dict:
 
     try:
         session = requests.Session()
-        # Add a small delay to avoid rate limiting
-        time.sleep(random.uniform(1.5, 3.0))
+        # Add a small delay to avoid rate limiting - increased for refresh stability
+        time.sleep(random.uniform(2.5, 4.5))
 
-        response = session.get(url, headers=headers, timeout=15)
+        response = session.get(url, headers=headers, timeout=15, allow_redirects=True)
         logger.info(f"Response status: {response.status_code}")
 
         if response.status_code == 503:
