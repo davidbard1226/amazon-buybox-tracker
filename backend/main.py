@@ -427,18 +427,74 @@ def lookup_buybox(req: ASINRequest, db: Session = Depends(get_db)):
     return data
 
 
+def scrape_with_retry(asin: str, marketplace: str, max_retries: int = 3) -> dict:
+    """Scrape an ASIN with retry logic on blocks/errors."""
+    for attempt in range(1, max_retries + 1):
+        data = get_amazon_buybox(asin, marketplace)
+        if data.get("status") == "success":
+            return data
+        if data.get("status") == "blocked":
+            wait = random.uniform(8, 15) * attempt
+            logger.warning(f"ASIN {asin} blocked (attempt {attempt}/{max_retries}), waiting {wait:.1f}s...")
+            time.sleep(wait)
+        elif data.get("status") == "error":
+            wait = random.uniform(3, 6)
+            logger.warning(f"ASIN {asin} error (attempt {attempt}/{max_retries}): {data.get('error')}, waiting {wait:.1f}s...")
+            time.sleep(wait)
+        else:
+            break
+    return data  # return last result even if failed
+
+
 @app.post("/api/buybox/bulk")
 def bulk_lookup(req: BulkASINRequest, db: Session = Depends(get_db)):
     results = []
-    for asin in req.asins:
-        asin = asin.strip().upper()
-        if asin:
-            data = get_amazon_buybox(asin, req.marketplace)
-            save_asin(db, data)
+    failed = []
+    asins = [a.strip().upper() for a in req.asins if a.strip()]
+    logger.info(f"Bulk scrape started for {len(asins)} ASINs")
+    for i, asin in enumerate(asins):
+        data = scrape_with_retry(asin, req.marketplace)
+        save_asin(db, data)
+        if data.get("status") == "success":
             save_price_history(db, data)
             results.append(data)
-            time.sleep(random.uniform(2, 4))
-    return {"results": results, "count": len(results)}
+        else:
+            failed.append({"asin": asin, "error": data.get("error", "Unknown error")})
+        # Progressive delay: longer every 10 products to avoid rate limiting
+        if (i + 1) % 10 == 0:
+            wait = random.uniform(10, 20)
+            logger.info(f"Processed {i+1}/{len(asins)}, cooling down {wait:.1f}s...")
+            time.sleep(wait)
+        else:
+            time.sleep(random.uniform(3, 6))
+    logger.info(f"Bulk scrape done: {len(results)} success, {len(failed)} failed")
+    return {"results": results, "count": len(results), "failed": failed, "failed_count": len(failed)}
+
+
+@app.post("/api/buybox/bulk-add")
+def bulk_add_asins(req: BulkASINRequest, db: Session = Depends(get_db)):
+    """Instantly save ASINs to the database without scraping.
+    They will be scraped in the background by the scheduler."""
+    asin_pattern = re.compile(r'^[A-Z0-9]{10}$')
+    added = []
+    skipped = []
+    for asin in req.asins:
+        asin = asin.strip().upper()
+        if not asin or not asin_pattern.match(asin):
+            skipped.append(asin)
+            continue
+        # Save a placeholder record so it appears in dashboard immediately
+        save_asin(db, {
+            "asin": asin,
+            "marketplace": req.marketplace,
+            "status": "pending",
+            "title": f"Pending scrape... ({asin})",
+            "buybox_status": "unknown",
+        })
+        added.append(asin)
+    logger.info(f"Bulk-add: {len(added)} ASINs saved, {len(skipped)} skipped")
+    return {"added": added, "added_count": len(added), "skipped": skipped,
+            "message": f"{len(added)} ASINs added. They will be scraped on the next scheduler run."}
 
 
 @app.post("/api/buybox/bulk-urls")
@@ -458,13 +514,23 @@ def bulk_url_lookup(req: BulkURLRequest, db: Session = Depends(get_db)):
         else:
             logger.warning(f"Could not extract ASIN from: {url}")
     results = []
-    for asin in asins:
-        data = get_amazon_buybox(asin, req.marketplace)
+    failed = []
+    logger.info(f"Bulk URL scrape started for {len(asins)} ASINs")
+    for i, asin in enumerate(asins):
+        data = scrape_with_retry(asin, req.marketplace)
         save_asin(db, data)
-        save_price_history(db, data)
-        results.append(data)
-        time.sleep(random.uniform(2, 4))
-    return {"results": results, "count": len(results), "asins_found": asins}
+        if data.get("status") == "success":
+            save_price_history(db, data)
+            results.append(data)
+        else:
+            failed.append({"asin": asin, "error": data.get("error", "Unknown error")})
+        if (i + 1) % 10 == 0:
+            wait = random.uniform(10, 20)
+            logger.info(f"Processed {i+1}/{len(asins)}, cooling down {wait:.1f}s...")
+            time.sleep(wait)
+        else:
+            time.sleep(random.uniform(3, 6))
+    return {"results": results, "count": len(results), "failed": failed, "failed_count": len(failed), "asins_found": asins}
 
 
 @app.get("/api/buybox/tracked")
