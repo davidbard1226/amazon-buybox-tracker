@@ -772,6 +772,86 @@ async function viewHistory(asin) {
   fetchHistory(asin);
 }
 
+// ── Excel Import ─────────────────────────────────────────────────
+async function importExcel() {
+  const fileInput = document.getElementById('excelFile');
+  const file = fileInput.files[0];
+  if (!file) { showAlert('importAlert', '⚠️ Please select a file first.', 'error'); return; }
+
+  const ext = file.name.split('.').pop().toLowerCase();
+  if (!['xlsx','xls','csv'].includes(ext)) {
+    showAlert('importAlert', '❌ Only .xlsx, .xls or .csv files are supported.', 'error'); return;
+  }
+
+  showAlert('importAlert', `<span class="loading"></span>Uploading <b>${file.name}</b>...`, 'info');
+  document.getElementById('importResult').innerHTML = '';
+
+  const formData = new FormData();
+  formData.append('file', file);
+
+  try {
+    const r = await fetch(API + '/api/import/excel', { method: 'POST', body: formData });
+    const d = await r.json();
+    if (!r.ok) {
+      showAlert('importAlert', `❌ Import failed: ${d.detail || 'Unknown error'}`, 'error');
+      return;
+    }
+    showAlert('importAlert', `✅ ${d.message || 'Import complete'}`, 'success');
+
+    // Show detailed results
+    const skippedHtml = d.skipped_records && d.skipped_records.length > 0 ? `
+      <div style="margin-top:10px;background:#ef444411;border:1px solid #ef444433;border-radius:8px;padding:10px 14px;">
+        <div style="font-size:0.8rem;color:#ef4444;font-weight:600;margin-bottom:4px;">⚠️ ${d.skipped} rows skipped:</div>
+        ${d.skipped_records.slice(0,10).map(s=>`<div style="font-size:0.75rem;color:#94a3b8;">${s.reason}</div>`).join('')}
+        ${d.skipped_records.length > 10 ? `<div style="font-size:0.75rem;color:#94a3b8;">...and ${d.skipped_records.length-10} more</div>` : ''}
+      </div>` : '';
+
+    const recordsHtml = d.records && d.records.length > 0 ? `
+      <table style="width:100%;font-size:0.82rem;border-collapse:collapse;margin-top:12px;">
+        <thead><tr style="background:#0f172a;">
+          <th style="padding:8px;text-align:left;color:#94a3b8;">ASIN</th>
+          <th style="padding:8px;text-align:left;color:#94a3b8;">SKU</th>
+          <th style="padding:8px;text-align:left;color:#94a3b8;">My Price</th>
+          <th style="padding:8px;text-align:left;color:#94a3b8;">Stock</th>
+        </tr></thead>
+        <tbody>${d.records.slice(0,20).map(rec=>`
+          <tr style="border-bottom:1px solid #1e293b;">
+            <td style="padding:8px;font-family:monospace;color:#94a3b8;">${rec.asin}</td>
+            <td style="padding:8px;color:#e2e8f0;">${rec.sku || '—'}</td>
+            <td style="padding:8px;color:#34d399;">${rec.my_price ? 'R'+Number(rec.my_price).toLocaleString('en-ZA',{minimumFractionDigits:2}) : '—'}</td>
+            <td style="padding:8px;color:${rec.my_stock > 10 ? '#10b981' : rec.my_stock > 0 ? '#f59e0b' : '#ef4444'}">${rec.my_stock !== null && rec.my_stock !== undefined ? rec.my_stock : '—'}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+      ${d.records.length > 20 ? `<div style="font-size:0.8rem;color:#94a3b8;margin-top:6px;">...and ${d.records.length-20} more rows imported</div>` : ''}` : '';
+
+    document.getElementById('importResult').innerHTML = skippedHtml + recordsHtml;
+
+    // Reload dashboard to reflect new data
+    allProducts = [];
+    loadDashboard();
+    fileInput.value = '';
+  } catch(e) {
+    showAlert('importAlert', `❌ Upload error: ${e.message}`, 'error');
+  }
+}
+
+function downloadTemplate() {
+  // Generate a CSV template matching the expected columns
+  const csv = [
+    'SKU,My Price,Stock,ASIN',
+    '0011C013AA,1399,58,B08GQZDSB4',
+    '0545C001AA,1660,9,B01ARH3Q5G',
+    '0546C001AA,1660,8,B01ARGZTV6',
+  ].join('\n');
+  const blob = new Blob([csv], {type:'text/csv'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'buybox-import-template.csv'; a.click();
+  URL.revokeObjectURL(url);
+  return false;
+}
+
 // ── Bulk Upload ───────────────────────────────────────────────────
 let _bulkPollTimer = null;
 
