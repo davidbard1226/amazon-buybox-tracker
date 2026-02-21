@@ -402,10 +402,24 @@ def get_amazon_buybox(asin: str, marketplace: str = "amazon.co.za") -> dict:
 
         # --- Rating & Reviews ---
         rating_el = soup.find("span", {"id": "acrPopover"})
-        result["rating"] = rating_el.get("title", "").split(" ")[0] if rating_el else None
+        rating_text = rating_el.get("title", "").split(" ")[0] if rating_el else None
+        # Convert rating to float, handle errors
+        try:
+            result["rating"] = float(rating_text) if rating_text else None
+        except (ValueError, TypeError):
+            result["rating"] = None
 
         reviews_el = soup.find("span", {"id": "acrCustomerReviewText"})
-        result["review_count"] = reviews_el.get_text(strip=True).split(" ")[0].replace(",", "") if reviews_el else None
+        if reviews_el:
+            review_text = reviews_el.get_text(strip=True).split(" ")[0]
+            # Clean review count: remove parentheses, commas, and convert to int
+            review_text = review_text.replace("(", "").replace(")", "").replace(",", "").strip()
+            try:
+                result["review_count"] = int(review_text) if review_text.isdigit() else None
+            except (ValueError, TypeError):
+                result["review_count"] = None
+        else:
+            result["review_count"] = None
 
         # --- Availability ---
         avail_el = soup.find("div", {"id": "availability"})
