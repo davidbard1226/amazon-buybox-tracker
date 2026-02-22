@@ -853,18 +853,116 @@ function downloadTemplate() {
 }
 
 // ── Bulk Upload ───────────────────────────────────────────────────
-let _bulkPollTimer = null;
-
-function _stopBulkPoll() {
-  if (_bulkPollTimer) { clearInterval(_bulkPollTimer); _bulkPollTimer = null; }
-}
-
 function _parseBulkLines(raw) {
   // Extract ASINs from raw text (10-char alphanumeric, possibly in URLs)
   const asinRe = /\b([A-Z0-9]{10})\b/gi;
   const found = new Set();
   for (const m of raw.matchAll(asinRe)) found.add(m[1].toUpperCase());
   return [...found];
+}
+
+async function submitBulk() {
+  const raw = document.getElementById('bulkInput').value.trim();
+  if (!raw) { showAlert('bulkAlert', '⚠️ Please paste at least one ASIN or URL.', 'error'); return; }
+
+  const asins = _parseBulkLines(raw);
+  const marketplace = document.getElementById('bulkMarket').value;
+  if (!asins.length) { showAlert('bulkAlert', '❌ No valid ASINs found. Each ASIN must be 10 characters (letters and numbers).', 'error'); return; }
+
+  const btn = document.getElementById('bulkBtn');
+  btn.disabled = true;
+  btn.innerHTML = `<span class="loading"></span>Opening ${asins.length} tab(s)...`;
+
+  showAlert('bulkAlert',
+    `<span class="loading"></span>⏳ Scraped 0/${asins.length} ASINs via extension...`,
+    'info');
+  document.getElementById('bulkResult').innerHTML = '';
+
+  const domain = marketplace.replace('www.', '');
+  let completed = 0;
+  let winning = 0, losing = 0, amazon = 0, timedOut = 0;
+
+  // Track old scraped_at for each ASIN so we detect new scrapes
+  const oldScrapedAt = {};
+  for (const p of allProducts) { if (p.asin) oldScrapedAt[p.asin] = p.scraped_at; }
+
+  // Open tabs one at a time with 3s gap to avoid overwhelming Amazon
+  const openNext = (i) => {
+    if (i >= asins.length) return;
+    const asin = asins[i];
+    window.open(`https://www.${domain}/dp/${asin}?auto_scrape=1`, '_blank');
+    setTimeout(() => openNext(i + 1), 3000);
+  };
+  openNext(0);
+
+  // Poll backend every 4s to detect completed scrapes
+  const maxWait = (asins.length * 3 + 60) * 1000; // tabs open time + 60s buffer
+  const started = Date.now();
+  const remaining = new Set(asins);
+
+  const poll = setInterval(async () => {
+    try {
+      const r = await fetch(API + '/api/buybox/tracked');
+      const d = await r.json();
+      const products = d.asins || [];
+
+      for (const asin of [...remaining]) {
+        const p = products.find(x => x.asin === asin);
+        if (p && p.scraped_at && p.scraped_at !== oldScrapedAt[asin]) {
+          remaining.delete(asin);
+          completed++;
+          if (p.buybox_status === 'winning') winning++;
+          else if (p.buybox_status === 'losing') losing++;
+          else if (p.buybox_status === 'amazon') amazon++;
+          oldScrapedAt[asin] = p.scraped_at;
+
+          // Update allProducts
+          const idx = allProducts.findIndex(x => x.asin === asin);
+          if (idx >= 0) allProducts[idx] = p; else allProducts.push(p);
+        }
+      }
+
+      const pct = Math.round((completed / asins.length) * 100);
+      showAlert('bulkAlert',
+        `<span class="loading"></span>⏳ Scraped ${completed}/${asins.length} ASINs via extension... · ${remaining.size} remaining
+         <div style="margin-top:6px;background:#0f172a;border-radius:4px;height:6px;"><div style="height:100%;border-radius:4px;background:#6366f1;width:${pct}%"></div></div>`,
+        'info');
+
+      if (remaining.size === 0 || Date.now() - started > maxWait) {
+        clearInterval(poll);
+        timedOut = remaining.size;
+        const doneMsg = `✅ Done! ${completed}/${asins.length} scraped — 🏆 ${winning} winning · 😞 ${losing} losing · 🛒 ${amazon} Amazon` +
+          (timedOut > 0 ? ` · ⏳ ${timedOut} timed out` : '');
+        showAlert('bulkAlert', doneMsg, completed > 0 ? 'success' : 'error');
+        updateStats(); renderTable();
+        btn.disabled = false; btn.innerHTML = '🚀 Fetch All via Extension';
+
+        // Show results table
+        const scraped = asins.map(asin => allProducts.find(p => p.asin === asin)).filter(Boolean);
+        if (scraped.length > 0) {
+          document.getElementById('bulkResult').innerHTML = `
+            <table style="width:100%;font-size:0.82rem;border-collapse:collapse;margin-top:12px;">
+              <thead><tr style="background:#0f172a;">
+                <th style="padding:8px;text-align:left;color:#94a3b8;">ASIN</th>
+                <th style="padding:8px;text-align:left;color:#94a3b8;">Product</th>
+                <th style="padding:8px;text-align:left;color:#94a3b8;">Price</th>
+                <th style="padding:8px;text-align:left;color:#94a3b8;">Seller</th>
+                <th style="padding:8px;text-align:left;color:#94a3b8;">Status</th>
+              </tr></thead>
+              <tbody>${scraped.map(p => `
+                <tr style="border-bottom:1px solid #1e293b;">
+                  <td style="padding:8px;font-family:monospace;color:#94a3b8;">${p.asin || '—'}</td>
+                  <td style="padding:8px;color:#e2e8f0;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${p.title || '—'}</td>
+                  <td style="padding:8px;">${p.buybox_price ? 'R'+Number(p.buybox_price).toLocaleString('en-ZA',{minimumFractionDigits:2}) : '—'}</td>
+                  <td style="padding:8px;color:#e2e8f0;">${p.buybox_seller || 'Unknown'}</td>
+                  <td style="padding:8px;">${fmtStatus(p.buybox_status)}</td>
+                </tr>`).join('')}
+              </tbody>
+            </table>`;
+        }
+      }
+    } catch(e) {}
+  }, 4000);
 }
 
 function _renderBulkProgress(job) {
