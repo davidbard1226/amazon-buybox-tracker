@@ -910,7 +910,7 @@ async function submitBulk() {
   let failedAsins = [];     // array of {asin, error}
   let finished = false;
   const tabOpenedAt = {};   // asin → timestamp when tab was opened (for timeout)
-  const TAB_TIMEOUT_MS = 60000; // 60s timeout per tab
+  const TAB_TIMEOUT_MS = 120000; // 120s timeout per tab (Amazon can be slow)
 
   // ── Step 2: open next tab(s) — must be called synchronously from user gesture
   //    OR wrapped in setTimeout(0) for subsequent calls (avoids popup blocker)
@@ -948,8 +948,22 @@ async function submitBulk() {
         if (doneAsins.find(x => x.asin === p.asin)) return;
         if (failedAsins.find(x => x.asin === p.asin)) return;
         const baseline = baselineScrapedAts[p.asin];
-        // A scrape is "new" if scraped_at exists AND differs from our snapshot
-        if (p.scraped_at && p.scraped_at !== baseline) {
+        // Detection logic:
+        // - New ASIN (not in baseline at all): any scraped_at means it's done
+        // - Existing ASIN: scraped_at must be NEWER than baseline (compare as dates)
+        let isDone = false;
+        if (p.scraped_at) {
+          if (baseline === undefined) {
+            // Brand new ASIN — it now exists in DB, so tab succeeded
+            isDone = true;
+          } else {
+            // Compare as timestamps — convert both to ms to avoid string format issues
+            const baselineMs = baseline ? new Date(baseline).getTime() : 0;
+            const newMs = new Date(p.scraped_at).getTime();
+            isDone = newMs > baselineMs + 5000; // must be at least 5s newer
+          }
+        }
+        if (isDone) {
           doneAsins.push(p);
           activeCount = Math.max(0, activeCount - 1);
           const idx = allProducts.findIndex(x => x.asin === p.asin);
@@ -967,7 +981,7 @@ async function submitBulk() {
         if (failedAsins.find(x => x.asin === asin)) return;
         const openedAt = tabOpenedAt[asin];
         if (openedAt && (now - openedAt) > TAB_TIMEOUT_MS) {
-          failedAsins.push({asin, error: 'Timeout (60s)'});
+          failedAsins.push({asin, error: 'Timeout (120s)'});
           activeCount = Math.max(0, activeCount - 1);
           newlyDone = true;
           if (queueIdx < asins.length) setTimeout(() => openNextTab(true), 0);
@@ -990,7 +1004,7 @@ async function submitBulk() {
         showAlert('bulkAlert', `✅ Done! ${doneAsins.length}/${asins.length} scraped — 🏆 ${winCount} winning · 😞 ${loseCount} losing · 🛒 ${azCount} Amazon`, 'success');
       }
     } catch(e) { console.error('Bulk poll error:', e); }
-  }, 4000);
+  }, 3000);
 }
 
 function _renderBulkExtensionProgress(opened, total, done, failed) {

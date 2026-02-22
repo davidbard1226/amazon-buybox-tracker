@@ -16,7 +16,6 @@ console.log('🚀 Amazon Buybox Tracker Extension Loaded v1.1.0');
       const mySellerName = items.mySellerName || '';
       const backendUrl = (items.backendUrl || '').replace(/\/+$/, '');
       if (!backendUrl) {
-        // Tell background to close this tab even if no backend set
         chrome.runtime.sendMessage({ action: 'closeTab' });
         return;
       }
@@ -25,40 +24,54 @@ console.log('🚀 Amazon Buybox Tracker Extension Loaded v1.1.0');
       sessionStorage.setItem('_buybox_scraped', '1');
 
       try {
-        // Try fast scrape first
+        // First attempt — page should be mostly rendered
         let data = scrapeProductPage(mySellerName);
+        console.log('🔍 Auto-scrape attempt 1:', data.seller, data.price);
 
-        // If seller unknown, click AOD panel and wait for it to render
+        // If seller unknown, wait extra 2s for JS rendering then retry
+        if (!data.seller || data.seller === 'Unknown') {
+          await new Promise(r => setTimeout(r, 2000));
+          data = scrapeProductPage(mySellerName);
+          console.log('🔍 Auto-scrape attempt 2 (after extra wait):', data.seller, data.price);
+        }
+
+        // If still unknown, try clicking AOD panel and wait for it to render
         if (!data.seller || data.seller === 'Unknown') {
           const clicked = await openAODPanel();
           if (clicked) {
-            await new Promise(r => setTimeout(r, 3000)); // wait for AOD panel
+            await new Promise(r => setTimeout(r, 4000)); // wait for AOD panel to fully render
             data = scrapeProductPage(mySellerName);
+            console.log('🔍 Auto-scrape attempt 3 (after AOD panel):', data.seller, data.price);
           }
         }
 
-        // Push to backend
+        // Push to backend — wait for response before closing tab
         const resp = await fetch(backendUrl + '/api/extension/scrape', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(data)
         });
 
-        console.log('✅ Auto-scrape complete for', data.asin, 'status:', resp.status);
+        if (!resp.ok) {
+          const errText = await resp.text().catch(() => resp.statusText);
+          console.error('❌ Backend POST failed:', resp.status, errText);
+        } else {
+          console.log('✅ Auto-scrape complete for', data.asin, '— seller:', data.seller, 'price:', data.price);
+        }
       } catch (e) {
         console.error('❌ Auto-scrape error:', e);
       } finally {
-        // Always close tab via background.js (window.close() blocked cross-origin)
-        setTimeout(() => chrome.runtime.sendMessage({ action: 'closeTab' }), 500);
+        // Wait 1s after POST completes to ensure backend has processed it before tab closes
+        setTimeout(() => chrome.runtime.sendMessage({ action: 'closeTab' }), 1000);
       }
     });
   };
 
-  // Wait for full page load + extra time for dynamic content
+  // Wait for full page load + extra time for JS-rendered content (buybox renders late)
   if (document.readyState === 'complete') {
-    setTimeout(runAutoScrape, 2000);
+    setTimeout(runAutoScrape, 3000);
   } else {
-    window.addEventListener('load', () => setTimeout(runAutoScrape, 2000));
+    window.addEventListener('load', () => setTimeout(runAutoScrape, 3000));
   }
 })();
 
