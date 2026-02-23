@@ -1302,47 +1302,78 @@ def run_now(db: Session = Depends(get_db)):
     refresh_all_asins(db)
     return {"message": "Manual refresh triggered for all tracked ASINs"}
 
-GSHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/1ISaEOPBElufeYh6eq6APtlFjeMvrKqlAwEd3F4K6rBw/export?format=csv&gid=2088256006"
+GSHEET_ID = "1ISaEOPBElufeYh6eq6APtlFjeMvrKqlAwEd3F4K6rBw"
+
+# All supplier tabs: gid, supplier name, SKU column index, Cost Price column index
+# Column index is 0-based. -1 means skip this tab (no cost column).
+GSHEET_TABS = [
+    {"gid": "683374593",  "supplier": "Pinnacle",        "sku_col": 0, "cost_col": 4},
+    {"gid": "1303527933", "supplier": "Tarsus",           "sku_col": 0, "cost_col": 5},
+    {"gid": "1631360215", "supplier": "Rectron",          "sku_col": 0, "cost_col": 5},
+    {"gid": "1663080928", "supplier": "Axiz",             "sku_col": 0, "cost_col": 4},
+    {"gid": "1947555616", "supplier": "SMD",              "sku_col": 0, "cost_col": 4},
+    {"gid": "606695391",  "supplier": "Mustek",           "sku_col": 0, "cost_col": 5},
+    {"gid": "420604899",  "supplier": "Esquire Products", "sku_col": 0, "cost_col": 6},
+    {"gid": "2088256006", "supplier": "Kolok",            "sku_col": 0, "cost_col": 3},
+    {"gid": "1013794846", "supplier": "Cost Data",        "sku_col": 0, "cost_col": 1},
+    {"gid": "854400299",  "supplier": "DCC",              "sku_col": 0, "cost_col": 4},
+    {"gid": "214462025",  "supplier": "VAST-Maynards",    "sku_col": 0, "cost_col": 3},
+]
+
+
+def _parse_cost(raw: str) -> float | None:
+    """Strip R prefix, spaces and commas then parse as float."""
+    cleaned = raw.replace("R", "").replace(",", "").replace("\xa0", "").strip()
+    try:
+        return float(cleaned) if cleaned else None
+    except ValueError:
+        return None
 
 
 @app.get("/api/costs/sync-gsheet")
 async def sync_costs_from_gsheet(db: Session = Depends(get_db)):
-    """Fetch cost prices from Google Sheet and update matched products by SKU."""
-    try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.get(GSHEET_CSV_URL, follow_redirects=True)
-            resp.raise_for_status()
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Failed to fetch Google Sheet: {str(e)}")
-
-    # Parse CSV
-    text_content = resp.text
-    reader = csv.reader(io.StringIO(text_content))
-    sheet_rows = []
-    for i, row in enumerate(reader):
-        if i == 0:
-            continue  # skip header
-        if len(row) < 4:
-            continue
-        sku_cell = row[0].strip()
-        item_name = row[1].strip()
-        cost_raw = row[3].strip()
-        if not sku_cell:
-            continue
-        # Parse cost price: strip R prefix and commas
-        cost_cleaned = cost_raw.replace("R", "").replace(",", "").strip()
-        try:
-            cost_val = float(cost_cleaned) if cost_cleaned else None
-        except ValueError:
-            cost_val = None
-        sheet_rows.append({"sku": sku_cell, "item_name": item_name, "cost_price": cost_val})
-
-    # Build a lookup: lowered SKU -> sheet row
+    """Fetch cost prices from ALL supplier tabs in the Google Sheet and update matched products by SKU.
+    Each tab is fetched individually. The FIRST match (lowest cost supplier priority order) wins,
+    unless a later tab has a lower cost — in that case both are recorded via cost_supplier field.
+    """
+    # Build master lookup: sku_lower -> {cost_price, supplier}
     sheet_lookup: dict = {}
-    for row in sheet_rows:
-        sheet_lookup[row["sku"].lower()] = row
 
-    # Match tracked products by SKU
+    async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
+        for tab in GSHEET_TABS:
+            url = f"https://docs.google.com/spreadsheets/d/{GSHEET_ID}/export?format=csv&gid={tab['gid']}"
+            try:
+                resp = await client.get(url)
+                resp.raise_for_status()
+            except Exception as e:
+                logger.warning(f"GSheet tab {tab['supplier']} (gid={tab['gid']}) fetch failed: {e}")
+                continue
+
+            reader = csv.reader(io.StringIO(resp.text))
+            for i, row in enumerate(reader):
+                if i == 0:
+                    continue  # skip header row
+                if len(row) <= max(tab["sku_col"], tab["cost_col"]):
+                    continue
+                sku_raw = row[tab["sku_col"]].strip()
+                if not sku_raw:
+                    continue
+                cost_val = _parse_cost(row[tab["cost_col"]])
+                if cost_val is None or cost_val <= 0:
+                    continue
+                sku_key = sku_raw.lower()
+                # Keep the entry with the LOWEST cost (best buy price) across all suppliers
+                existing = sheet_lookup.get(sku_key)
+                if existing is None or cost_val < existing["cost_price"]:
+                    sheet_lookup[sku_key] = {
+                        "cost_price": cost_val,
+                        "supplier": tab["supplier"],
+                        "sku_original": sku_raw,
+                    }
+
+    logger.info(f"GSheet sync: built lookup with {len(sheet_lookup)} unique SKUs across {len(GSHEET_TABS)} tabs")
+
+    # Match tracked products by SKU and update cost_price + cost_supplier
     all_products = get_all_asins(db)
     matched = 0
     updated = 0
@@ -1352,14 +1383,13 @@ async def sync_costs_from_gsheet(db: Session = Depends(get_db)):
         sku = (product.sku or "").strip()
         if not sku:
             continue
-        sheet_row = sheet_lookup.get(sku.lower())
-        if sheet_row:
+        entry = sheet_lookup.get(sku.lower())
+        if entry:
             matched += 1
-            if sheet_row["cost_price"] is not None:
-                product.cost_price = sheet_row["cost_price"]
-                product.cost_supplier = f"Supplier Sheet – {sheet_row['item_name']}"
-                product.updated_at = datetime.utcnow()
-                updated += 1
+            product.cost_price = entry["cost_price"]
+            product.cost_supplier = entry["supplier"]
+            product.updated_at = datetime.utcnow()
+            updated += 1
         else:
             not_found.append(sku)
 
@@ -1370,7 +1400,13 @@ async def sync_costs_from_gsheet(db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=f"DB commit failed: {str(e)}")
 
     logger.info(f"GSheet cost sync: {matched} matched, {updated} updated, {len(not_found)} not found")
-    return {"matched": matched, "updated": updated, "not_found": not_found}
+    return {
+        "matched": matched,
+        "updated": updated,
+        "not_found": not_found,
+        "sheet_skus_loaded": len(sheet_lookup),
+        "tabs_fetched": len(GSHEET_TABS),
+    }
 
 
 class CostUpdateRequest(BaseModel):
