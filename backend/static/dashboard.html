@@ -136,28 +136,40 @@ tr:hover td{background:rgba(255,255,255,0.02);}
   <div class="card">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
       <h2>📋 Tracked Products</h2>
-      <button class="btn btn-primary btn-sm" onclick="refreshAll()">🔄 Refresh All</button>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <span id="selectedCountBadge" style="display:none;font-size:0.8rem;background:#f97316;color:#fff;padding:3px 10px;border-radius:12px;font-weight:600;"></span>
+        <button class="btn btn-sm" style="background:#334155;color:#e2e8f0;" id="refreshSelectedBtn" onclick="refreshSelected()" style="display:none;">🔄 Refresh Selected</button>
+        <button class="btn btn-primary btn-sm" onclick="refreshAll()">🔄 Refresh All</button>
+        <button class="btn btn-sm" style="background:#1e3a5f;color:#93c5fd;border:1px solid #2563eb;" onclick="syncGSheet()">📊 Sync Costs</button>
+      </div>
     </div>
     <div class="search-bar">
       <input type="text" id="searchInput" placeholder="🔍 Search by title, ASIN or seller..." oninput="applyFilters()"/>
     </div>
-    <div class="filter-row">
-      <span style="font-size:0.8rem;color:#94a3b8;align-self:center;">Filter:</span>
+    <div class="filter-row" style="flex-wrap:wrap;gap:8px;align-items:center;">
+      <span style="font-size:0.8rem;color:#94a3b8;align-self:center;">Status:</span>
       <button class="filter-btn active" onclick="setFilter('all',this)">All</button>
       <button class="filter-btn" onclick="setFilter('winning',this)">🏆 Winning</button>
       <button class="filter-btn" onclick="setFilter('losing',this)">😞 Losing</button>
       <button class="filter-btn" onclick="setFilter('amazon',this)">🛒 Amazon</button>
+      <span style="font-size:0.8rem;color:#94a3b8;align-self:center;margin-left:8px;">Seller:</span>
+      <select id="sellerFilter" onchange="renderTable()" style="background:#0f172a;border:1px solid #334155;color:#e2e8f0;padding:6px 12px;border-radius:20px;font-size:0.875rem;outline:none;">
+        <option value="">All Sellers</option>
+      </select>
+      <span id="searchCount" style="font-size:0.8rem;color:#f97316;font-weight:600;margin-left:auto;"></span>
     </div>
     <div id="alertBox"></div>
     <div class="table-wrap">
       <table id="productsTable">
         <thead>
           <tr>
+            <th style="width:36px;"><input type="checkbox" id="selectAll" onchange="toggleSelectAll(this)" title="Select all" style="width:16px;height:16px;cursor:pointer;"/></th>
             <th></th>
             <th onclick="sortTable('title')" style="cursor:pointer;">Product ↕</th>
             <th onclick="sortTable('asin')" style="cursor:pointer;">ASIN ↕</th>
             <th onclick="sortTable('sku')" style="cursor:pointer;">SKU ↕</th>
             <th onclick="sortTable('my_price')" style="cursor:pointer;">My Price ↕</th>
+            <th onclick="sortTable('cost_price')" style="cursor:pointer;">Cost ↕</th>
             <th onclick="sortTable('my_stock')" style="cursor:pointer;">Stock ↕</th>
             <th onclick="sortTable('buybox_price')" style="cursor:pointer;">Buybox Price ↕</th>
             <th onclick="sortTable('buybox_seller')" style="cursor:pointer;">Buybox Seller ↕</th>
@@ -439,6 +451,7 @@ let allProducts = [];
 let currentFilter = 'all';
 let sortCol = 'scraped_at';
 let sortDir = -1;
+let selectedAsins = new Set();
 
 // ── Page Navigation ──────────────────────────────────────────────
 function showPage(name) {
@@ -546,47 +559,88 @@ function sortTable(col) {
 
 function renderTable() {
   const search = (document.getElementById('searchInput').value || '').toLowerCase();
+  const sellerF = (document.getElementById('sellerFilter') ? document.getElementById('sellerFilter').value : '');
   let data = allProducts.filter(p => {
     if (currentFilter !== 'all' && p.buybox_status !== currentFilter) return false;
+    if (sellerF && p.buybox_seller !== sellerF) return false;
     if (search) {
-      const hay = `${p.title||''} ${p.asin||''} ${p.buybox_seller||''}`.toLowerCase();
+      const hay = `${p.title||''} ${p.asin||''} ${p.buybox_seller||''} ${p.sku||''}`.toLowerCase();
       if (!hay.includes(search)) return false;
     }
     return true;
   });
 
+  // Update seller filter options
+  const sellerSel = document.getElementById('sellerFilter');
+  if (sellerSel) {
+    const sellers = [...new Set(allProducts.map(p => p.buybox_seller).filter(Boolean))].sort();
+    const curVal = sellerSel.value;
+    sellerSel.innerHTML = '<option value="">All Sellers</option>' + sellers.map(s => `<option value="${s}"${s===curVal?' selected':''}>${s}</option>`).join('');
+  }
+
+  // Search count
+  const countEl = document.getElementById('searchCount');
+  if (countEl) {
+    if (search || sellerF || currentFilter !== 'all') {
+      countEl.textContent = `${data.length} product${data.length!==1?'s':''} found`;
+    } else {
+      countEl.textContent = `${data.length} product${data.length!==1?'s':''} total`;
+    }
+  }
+
   data.sort((a, b) => {
-    let va = a[sortCol] || '';
-    let vb = b[sortCol] || '';
-    if (typeof va === 'number') return (va - vb) * sortDir;
+    let va = a[sortCol]; let vb = b[sortCol];
+    if (va == null) va = ''; if (vb == null) vb = '';
+    if (typeof va === 'number' || typeof vb === 'number') return ((Number(va)||0) - (Number(vb)||0)) * sortDir;
     return String(va).localeCompare(String(vb)) * sortDir;
   });
 
   const tbody = document.getElementById('productsBody');
   if (!data.length) {
-    tbody.innerHTML = `<tr><td colspan="8"><div class="empty-state"><div class="icon">🔍</div><p>No products match your search/filter.</p></div></td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="13"><div class="empty-state"><div class="icon">🔍</div><p>No products match your search/filter.</p></div></td></tr>`;
     return;
   }
 
   tbody.innerHTML = data.map(p => {
-    const priceDiff = (p.my_price && p.buybox_price) ? p.buybox_price - p.my_price : null;
-    const priceDiffHtml = priceDiff !== null
-      ? `<div style="font-size:0.7rem;margin-top:2px;color:${priceDiff > 0 ? '#10b981' : priceDiff < 0 ? '#ef4444' : '#94a3b8'};">${priceDiff > 0 ? '▲ Buybox higher' : priceDiff < 0 ? '▼ Buybox lower' : '= Same price'}</div>`
+    const cur = CURRENCY[p.marketplace] || 'R';
+    // R diff: buybox vs my price
+    const diff = (p.my_price && p.buybox_price) ? p.buybox_price - p.my_price : null;
+    const diffHtml = diff !== null
+      ? `<div style="font-size:0.75rem;margin-top:3px;font-weight:600;color:${diff > 0 ? '#10b981' : diff < 0 ? '#ef4444' : '#94a3b8'};">${diff > 0 ? '▲' : diff < 0 ? '▼' : '='} ${cur}${Math.abs(diff).toLocaleString('en-ZA',{minimumFractionDigits:2})}</div>`
       : '';
+    // Cost & profit
+    const cost = p.cost_price ? Number(p.cost_price) : null;
+    const costHtml = cost
+      ? `<div style="font-weight:600;color:#e2e8f0;">${cur}${cost.toLocaleString('en-ZA',{minimumFractionDigits:2})}</div>${p.cost_supplier ? `<div style="font-size:0.7rem;color:#64748b;margin-top:2px;">${p.cost_supplier}</div>` : ''}`
+      : `<span style="color:#334155;font-size:0.8rem;">—</span>`;
+    const myP = p.my_price ? Number(p.my_price) : null;
+    let profitHtml = '';
+    if (cost && myP) {
+      const profit = myP - cost;
+      const pct = ((profit / myP) * 100).toFixed(1);
+      profitHtml = `<div style="font-weight:700;color:${profit >= 0 ? '#10b981' : '#ef4444'};">${profit >= 0 ? '+' : ''}${cur}${profit.toLocaleString('en-ZA',{minimumFractionDigits:2})}</div><div style="font-size:0.7rem;color:${profit >= 0 ? '#10b981' : '#ef4444'};">${pct}% margin</div>`;
+    } else if (cost && p.buybox_price) {
+      // fallback: profit vs buybox price (if they match)
+      const profit = Number(p.buybox_price) - cost;
+      profitHtml = `<div style="font-size:0.75rem;color:#64748b;">vs BB: <span style="color:${profit>=0?'#10b981':'#ef4444'};font-weight:600;">${profit>=0?'+':''}${cur}${profit.toLocaleString('en-ZA',{minimumFractionDigits:2})}</span></div>`;
+    }
     const stockHtml = p.my_stock !== null && p.my_stock !== undefined
       ? `<span style="color:${p.my_stock > 10 ? '#10b981' : p.my_stock > 0 ? '#f59e0b' : '#ef4444'};font-weight:600;">${p.my_stock}</span>`
       : '<span style="color:#475569">—</span>';
+    const chk = selectedAsins.has(p.asin);
     return `
-    <tr>
+    <tr style="${chk ? 'background:rgba(249,115,22,0.07);' : ''}">
+      <td><input type="checkbox" data-asin="${p.asin}" data-market="${p.marketplace}" onchange="toggleSelect(this)" ${chk?'checked':''} style="width:16px;height:16px;cursor:pointer;"/></td>
       <td>${fmtImg(p.image_url)}</td>
-      <td style="max-width:220px;">
+      <td style="max-width:200px;">
         <div style="font-weight:500;font-size:0.85rem;line-height:1.4;">${p.title || '—'}</div>
         <a href="${p.url}" target="_blank" style="font-size:0.75rem;color:#f97316;">View on Amazon ↗</a>
       </td>
       <td><span class="asin-code">${p.asin}</span></td>
       <td><span style="font-family:monospace;font-size:0.8rem;color:#94a3b8;">${p.sku || '—'}</span></td>
-      <td>${p.my_price ? `<span class="price-val" style="color:#34d399;">${CURRENCY[p.marketplace]||'R'}${Number(p.my_price).toLocaleString('en-ZA',{minimumFractionDigits:2})}</span>${priceDiffHtml}` : '<span style="color:#475569">—</span>'}</td>
-      <td>${stockHtml}</td>
+      <td>${myP ? `<div style="font-weight:700;color:#34d399;">${cur}${myP.toLocaleString('en-ZA',{minimumFractionDigits:2})}</div>${diffHtml}` : '<span style="color:#475569">—</span>'}</td>
+      <td>${costHtml}</td>
+      <td style="text-align:center;">${stockHtml}</td>
       <td>${fmtPrice(p.buybox_price, p.marketplace)}</td>
       <td>${fmtSeller(p.buybox_seller, p.buybox_status)}</td>
       <td>${fmtStatus(p.buybox_status)}</td>
@@ -600,6 +654,84 @@ function renderTable() {
       </td>
     </tr>`;
   }).join('');
+
+  // Sync select-all checkbox
+  const allChk = document.getElementById('selectAll');
+  if (allChk) allChk.checked = data.length > 0 && data.every(p => selectedAsins.has(p.asin));
+  updateSelectedBadge();
+}
+
+// ── Checkbox selection ────────────────────────────────────────────
+function toggleSelect(chk) {
+  const asin = chk.dataset.asin;
+  if (chk.checked) selectedAsins.add(asin);
+  else selectedAsins.delete(asin);
+  updateSelectedBadge();
+  const allChk = document.getElementById('selectAll');
+  if (allChk) {
+    const visible = [...document.querySelectorAll('#productsBody input[type=checkbox]')];
+    allChk.checked = visible.length > 0 && visible.every(c => c.checked);
+  }
+}
+
+function toggleSelectAll(chk) {
+  const boxes = document.querySelectorAll('#productsBody input[type=checkbox][data-asin]');
+  boxes.forEach(b => {
+    if (chk.checked) selectedAsins.add(b.dataset.asin);
+    else selectedAsins.delete(b.dataset.asin);
+    b.checked = chk.checked;
+  });
+  updateSelectedBadge();
+}
+
+function updateSelectedBadge() {
+  const n = selectedAsins.size;
+  const badge = document.getElementById('selectedCountBadge');
+  const btn = document.getElementById('refreshSelectedBtn');
+  if (badge) { badge.textContent = n > 0 ? `${n} selected` : ''; badge.style.display = n > 0 ? 'inline' : 'none'; }
+  if (btn) btn.style.display = n > 0 ? 'inline-block' : 'none';
+}
+
+async function refreshSelected() {
+  if (!selectedAsins.size) return;
+  const toRefresh = allProducts.filter(p => selectedAsins.has(p.asin));
+  showAlert('alertBox', `<span class="loading"></span>Opening ${toRefresh.length} tab(s) for selected products...`, 'info');
+  let i = 0;
+  const openNext = () => {
+    if (i >= toRefresh.length) {
+      setTimeout(() => loadDashboard(), 5000);
+      return;
+    }
+    const p = toRefresh[i++];
+    const domain = (p.marketplace || 'amazon.co.za').replace('www.','');
+    window.open(`https://www.${domain}/dp/${p.asin}?auto_scrape=1`, '_blank');
+    setTimeout(openNext, 3000);
+  };
+  openNext();
+  showAlert('alertBox', `⏳ Opening ${toRefresh.length} tab(s). Extension will scrape each one. Reloading in ~${toRefresh.length*3+10}s`, 'info');
+  setTimeout(() => loadDashboard(), (toRefresh.length * 3 + 10) * 1000);
+}
+
+// ── Google Sheet Cost Sync ────────────────────────────────────────
+async function syncGSheet() {
+  const btn = event.target;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="loading"></span>Syncing...';
+  try {
+    const r = await fetch(API + '/api/costs/sync-gsheet');
+    const d = await r.json();
+    if (r.ok) {
+      showAlert('alertBox', `✅ Cost sync complete — ${d.updated} products updated from Google Sheet. ${d.not_found && d.not_found.length ? `${d.not_found.length} SKUs not matched.` : 'All SKUs matched!'}`, 'success');
+      await loadDashboard();
+    } else {
+      showAlert('alertBox', `❌ Sync failed: ${d.detail || 'Unknown error'}`, 'error');
+    }
+  } catch(e) {
+    showAlert('alertBox', `❌ Sync error: ${e.message}`, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '📊 Sync Costs';
+  }
 }
 
 // ── Refresh via Extension (open tab, auto-scrape, close) ─────────

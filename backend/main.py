@@ -12,6 +12,7 @@ import csv
 import requests
 import threading
 import uuid
+import httpx
 from datetime import datetime
 from typing import List, Optional, Dict
 from fastapi import FastAPI, HTTPException, Depends, UploadFile, File
@@ -607,7 +608,7 @@ def _migrate_db():
     try:
         with engine.connect() as conn:
             # Check and add sku, my_price, my_stock columns
-            for col, col_type in [("sku", "VARCHAR(255)"), ("my_price", "FLOAT"), ("my_stock", "INTEGER")]:
+            for col, col_type in [("sku", "VARCHAR(255)"), ("my_price", "FLOAT"), ("my_stock", "INTEGER"), ("cost_price", "FLOAT"), ("cost_supplier", "VARCHAR(255)")]:
                 try:
                     conn.execute(text(f"ALTER TABLE tracked_asins ADD COLUMN {col} {col_type}"))
                     conn.commit()
@@ -669,6 +670,8 @@ def asin_to_dict(a: TrackedASIN) -> dict:
         "url": f"https://www.{a.marketplace}/dp/{a.asin}", "status": "success",
         # My seller data
         "sku": a.sku, "my_price": a.my_price, "my_stock": a.my_stock,
+        # Cost data
+        "cost_price": a.cost_price, "cost_supplier": a.cost_supplier,
     }
 
 
@@ -1298,6 +1301,101 @@ def run_now(db: Session = Depends(get_db)):
         raise HTTPException(status_code=503, detail="Scheduler module not available")
     refresh_all_asins(db)
     return {"message": "Manual refresh triggered for all tracked ASINs"}
+
+GSHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/1ISaEOPBElufeYh6eq6APtlFjeMvrKqlAwEd3F4K6rBw/export?format=csv&gid=2088256006"
+
+
+@app.get("/api/costs/sync-gsheet")
+async def sync_costs_from_gsheet(db: Session = Depends(get_db)):
+    """Fetch cost prices from Google Sheet and update matched products by SKU."""
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(GSHEET_CSV_URL, follow_redirects=True)
+            resp.raise_for_status()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Failed to fetch Google Sheet: {str(e)}")
+
+    # Parse CSV
+    text_content = resp.text
+    reader = csv.reader(io.StringIO(text_content))
+    sheet_rows = []
+    for i, row in enumerate(reader):
+        if i == 0:
+            continue  # skip header
+        if len(row) < 4:
+            continue
+        sku_cell = row[0].strip()
+        item_name = row[1].strip()
+        cost_raw = row[3].strip()
+        if not sku_cell:
+            continue
+        # Parse cost price: strip R prefix and commas
+        cost_cleaned = cost_raw.replace("R", "").replace(",", "").strip()
+        try:
+            cost_val = float(cost_cleaned) if cost_cleaned else None
+        except ValueError:
+            cost_val = None
+        sheet_rows.append({"sku": sku_cell, "item_name": item_name, "cost_price": cost_val})
+
+    # Build a lookup: lowered SKU -> sheet row
+    sheet_lookup: dict = {}
+    for row in sheet_rows:
+        sheet_lookup[row["sku"].lower()] = row
+
+    # Match tracked products by SKU
+    all_products = get_all_asins(db)
+    matched = 0
+    updated = 0
+    not_found = []
+
+    for product in all_products:
+        sku = (product.sku or "").strip()
+        if not sku:
+            continue
+        sheet_row = sheet_lookup.get(sku.lower())
+        if sheet_row:
+            matched += 1
+            if sheet_row["cost_price"] is not None:
+                product.cost_price = sheet_row["cost_price"]
+                product.cost_supplier = f"Supplier Sheet – {sheet_row['item_name']}"
+                product.updated_at = datetime.utcnow()
+                updated += 1
+        else:
+            not_found.append(sku)
+
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"DB commit failed: {str(e)}")
+
+    logger.info(f"GSheet cost sync: {matched} matched, {updated} updated, {len(not_found)} not found")
+    return {"matched": matched, "updated": updated, "not_found": not_found}
+
+
+class CostUpdateRequest(BaseModel):
+    asin: str
+    cost_price: float
+
+
+@app.post("/api/costs/update")
+def update_cost_price(req: CostUpdateRequest, db: Session = Depends(get_db)):
+    """Update the cost_price for a single ASIN."""
+    asin = req.asin.strip().upper()
+    product = db.query(TrackedASIN).filter(TrackedASIN.asin == asin).first()
+    if not product:
+        raise HTTPException(status_code=404, detail=f"ASIN {asin} not found")
+    product.cost_price = req.cost_price
+    product.updated_at = datetime.utcnow()
+    try:
+        db.commit()
+        db.refresh(product)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"DB commit failed: {str(e)}")
+    logger.info(f"Updated cost_price for {asin}: {req.cost_price}")
+    return asin_to_dict(product)
+
 
 if __name__ == "__main__":
     import uvicorn

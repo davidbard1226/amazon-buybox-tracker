@@ -3,7 +3,7 @@ Database module - uses PostgreSQL (Supabase) in production, SQLite locally.
 """
 import os
 from datetime import datetime
-from sqlalchemy import create_engine, Column, String, Float, DateTime, Text, Integer, Boolean
+from sqlalchemy import create_engine, Column, String, Float, DateTime, Text, Integer, Boolean, text
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
 from loguru import logger
 
@@ -75,6 +75,9 @@ class TrackedASIN(Base):
     sku = Column(String(255), nullable=True)
     my_price = Column(Float, nullable=True)
     my_stock = Column(Integer, nullable=True)
+    # Cost data
+    cost_price = Column(Float, nullable=True)
+    cost_supplier = Column(String(255), nullable=True)
 
 
 class PriceHistory(Base):
@@ -98,6 +101,15 @@ def init_db():
     try:
         Base.metadata.create_all(bind=engine)
         logger.info("Database tables initialized")
+        # Migration: add cost_price and cost_supplier columns if they don't exist
+        with engine.connect() as conn:
+            for col, col_type in [("cost_price", "FLOAT"), ("cost_supplier", "VARCHAR(255)")]:
+                try:
+                    conn.execute(text(f"ALTER TABLE tracked_asins ADD COLUMN {col} {col_type}"))
+                    conn.commit()
+                    logger.info(f"✅ Migration: added column '{col}' to tracked_asins")
+                except Exception:
+                    pass  # Column already exists — safe to ignore
     except Exception as e:
         logger.error(f"Database initialization failed: {e}")
         logger.error("⚠️  The app will start but data won't be saved until the DB is reachable.")
