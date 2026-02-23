@@ -609,7 +609,8 @@ function renderTable() {
     const diffHtml = diff !== null
       ? `<div style="font-size:0.75rem;margin-top:3px;font-weight:600;color:${diff > 0 ? '#10b981' : diff < 0 ? '#ef4444' : '#94a3b8'};">${diff > 0 ? '▲' : diff < 0 ? '▼' : '='} ${cur}${Math.abs(diff).toLocaleString('en-ZA',{minimumFractionDigits:2})}</div>`
       : '';
-    // Cost & profit
+    // Cost & profit  (Amazon fee = 6% of selling price, applied before profit)
+    const AMZN_FEE = 0.06;
     const cost = p.cost_price ? Number(p.cost_price) : null;
     const costHtml = cost
       ? `<div style="font-weight:600;color:#e2e8f0;">${cur}${cost.toLocaleString('en-ZA',{minimumFractionDigits:2})}</div>${p.cost_supplier ? `<div style="font-size:0.7rem;color:#64748b;margin-top:2px;">${p.cost_supplier}</div>` : ''}`
@@ -617,13 +618,22 @@ function renderTable() {
     const myP = p.my_price ? Number(p.my_price) : null;
     let profitHtml = '';
     if (cost && myP) {
-      const profit = myP - cost;
-      const pct = ((profit / myP) * 100).toFixed(1);
-      profitHtml = `<div style="font-weight:700;color:${profit >= 0 ? '#10b981' : '#ef4444'};">${profit >= 0 ? '+' : ''}${cur}${profit.toLocaleString('en-ZA',{minimumFractionDigits:2})}</div><div style="font-size:0.7rem;color:${profit >= 0 ? '#10b981' : '#ef4444'};">${pct}% margin</div>`;
+      const amznFeeR  = myP * AMZN_FEE;                  // 6% Amazon fee in Rand
+      const netRevenue = myP - amznFeeR;                  // what you actually receive
+      const profit    = netRevenue - cost;                 // profit after fee & cost
+      const margin    = ((profit / myP) * 100).toFixed(1);
+      const colour    = profit >= 0 ? '#10b981' : '#ef4444';
+      profitHtml = `
+        <div style="font-weight:700;color:${colour};">${profit >= 0 ? '+' : ''}${cur}${Math.abs(profit).toLocaleString('en-ZA',{minimumFractionDigits:2})}</div>
+        <div style="font-size:0.7rem;color:#64748b;margin-top:1px;">
+          Fee: <span style="color:#f59e0b;">−${cur}${amznFeeR.toLocaleString('en-ZA',{minimumFractionDigits:2})}</span>
+          &nbsp;·&nbsp;<span style="color:${colour};">${margin}% margin</span>
+        </div>`;
     } else if (cost && p.buybox_price) {
-      // fallback: profit vs buybox price (if they match)
-      const profit = Number(p.buybox_price) - cost;
-      profitHtml = `<div style="font-size:0.75rem;color:#64748b;">vs BB: <span style="color:${profit>=0?'#10b981':'#ef4444'};font-weight:600;">${profit>=0?'+':''}${cur}${profit.toLocaleString('en-ZA',{minimumFractionDigits:2})}</span></div>`;
+      const bb = Number(p.buybox_price);
+      const amznFeeR = bb * AMZN_FEE;
+      const profit = bb - amznFeeR - cost;
+      profitHtml = `<div style="font-size:0.75rem;color:#64748b;">vs BB: <span style="color:${profit>=0?'#10b981':'#ef4444'};font-weight:600;">${profit>=0?'+':''}${cur}${Math.abs(profit).toLocaleString('en-ZA',{minimumFractionDigits:2})}</span><span style="color:#64748b;font-size:0.7rem;"> (after 6% fee)</span></div>`;
     }
     const stockHtml = p.my_stock !== null && p.my_stock !== undefined
       ? `<span style="color:${p.my_stock > 10 ? '#10b981' : p.my_stock > 0 ? '#f59e0b' : '#ef4444'};font-weight:600;">${p.my_stock}</span>`
@@ -638,7 +648,17 @@ function renderTable() {
         <a href="${p.url}" target="_blank" style="font-size:0.75rem;color:#f97316;">View on Amazon ↗</a>
       </td>
       <td><span class="asin-code">${p.asin}</span></td>
-      <td><span style="font-family:monospace;font-size:0.8rem;color:#94a3b8;">${p.sku || '—'}</span></td>
+      <td>
+        <div style="display:flex;align-items:center;gap:5px;" id="sku-display-${p.asin}">
+          <span style="font-family:monospace;font-size:0.8rem;color:#94a3b8;">${p.sku || '—'}</span>
+          <button onclick="editSku('${p.asin}','${(p.sku||'').replace(/'/g,"\\'")}',this)" title="Edit SKU" style="background:none;border:none;cursor:pointer;color:#475569;font-size:0.75rem;padding:1px 4px;border-radius:3px;transition:color 0.2s;" onmouseover="this.style.color='#f97316'" onmouseout="this.style.color='#475569'">✏️</button>
+        </div>
+        <div id="sku-edit-${p.asin}" style="display:none;gap:4px;align-items:center;">
+          <input id="sku-input-${p.asin}" type="text" value="${p.sku||''}" style="width:110px;padding:4px 8px;font-size:0.8rem;font-family:monospace;background:#0f172a;border:1px solid #f97316;color:#e2e8f0;border-radius:5px;" onkeydown="if(event.key==='Enter')saveSku('${p.asin}');if(event.key==='Escape')cancelSku('${p.asin}')"/>
+          <button onclick="saveSku('${p.asin}')" style="background:#f97316;border:none;color:#fff;padding:3px 8px;border-radius:4px;cursor:pointer;font-size:0.75rem;">✓</button>
+          <button onclick="cancelSku('${p.asin}')" style="background:#334155;border:none;color:#e2e8f0;padding:3px 8px;border-radius:4px;cursor:pointer;font-size:0.75rem;">✕</button>
+        </div>
+      </td>
       <td>${p.cost_supplier
         ? `<span style="display:inline-block;background:rgba(99,102,241,0.15);color:#a5b4fc;border:1px solid rgba(99,102,241,0.3);padding:3px 10px;border-radius:12px;font-size:0.8rem;font-weight:600;white-space:nowrap;">${p.cost_supplier}</span>`
         : '<span style="color:#334155;font-size:0.8rem;">—</span>'}</td>
@@ -739,7 +759,50 @@ async function syncGSheet() {
 }
 
 // ── Refresh via Extension (open tab, auto-scrape, close) ─────────
-async function quickRefresh(asin, market) {
+// ── SKU inline edit ──────────────────────────────────────────────
+function editSku(asin, currentSku, btn) {
+  document.getElementById('sku-display-' + asin).style.display = 'none';
+  const editDiv = document.getElementById('sku-edit-' + asin);
+  editDiv.style.display = 'flex';
+  const inp = document.getElementById('sku-input-' + asin);
+  inp.value = currentSku;
+  inp.focus();
+  inp.select();
+}
+
+function cancelSku(asin) {
+  document.getElementById('sku-display-' + asin).style.display = 'flex';
+  document.getElementById('sku-edit-' + asin).style.display = 'none';
+}
+
+async function saveSku(asin) {
+  const newSku = document.getElementById('sku-input-' + asin).value.trim();
+  // Find the product in allProducts and update its SKU
+  const prod = allProducts.find(p => p.asin === asin);
+  if (!prod) return;
+  // Build update payload - PATCH the tracked product SKU via the import endpoint
+  try {
+    const resp = await fetch('/api/costs/update-sku', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({asin: asin, sku: newSku})
+    });
+    const data = await resp.json();
+    if (data.ok) {
+      prod.sku = newSku;
+      showAlert('alertBox', `✅ SKU updated to <b>${newSku || '(cleared)'}</b>. Click 📊 Sync Costs to pull cost price.`, 'success');
+      renderTable();
+    } else {
+      showAlert('alertBox', '❌ Failed to update SKU: ' + (data.detail || 'unknown error'), 'error');
+      cancelSku(asin);
+    }
+  } catch(e) {
+    showAlert('alertBox', '❌ Error: ' + e.message, 'error');
+    cancelSku(asin);
+  }
+}
+
+function quickRefresh(asin, market) {
   showAlert('alertBox', `<span class="loading"></span>Opening ${asin} for auto-scrape — tab will close automatically...`, 'info');
 
   // Record the old scraped_at so we detect when a NEW scrape comes in

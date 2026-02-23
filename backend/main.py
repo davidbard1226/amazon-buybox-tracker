@@ -1433,6 +1433,29 @@ def update_cost_price(req: CostUpdateRequest, db: Session = Depends(get_db)):
     return asin_to_dict(product)
 
 
+class SkuUpdateRequest(BaseModel):
+    asin: str
+    sku: str
+
+@app.post("/api/costs/update-sku")
+def update_sku(req: SkuUpdateRequest, db: Session = Depends(get_db)):
+    """Update the SKU for a single ASIN so Google Sheet cost sync can match it."""
+    asin = req.asin.strip().upper()
+    product = db.query(TrackedASIN).filter(TrackedASIN.asin == asin).first()
+    if not product:
+        raise HTTPException(status_code=404, detail=f"ASIN {asin} not found")
+    product.sku = req.sku.strip()
+    product.updated_at = datetime.utcnow()
+    try:
+        db.commit()
+        db.refresh(product)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"DB commit failed: {str(e)}")
+    logger.info(f"Updated SKU for {asin}: {req.sku}")
+    return {"ok": True, "asin": asin, "sku": product.sku}
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=8001, reload=True)
