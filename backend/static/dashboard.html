@@ -171,6 +171,8 @@ tr:hover td{background:rgba(255,255,255,0.02);}
             <th onclick="sortTable('cost_supplier')" style="cursor:pointer;">Supplier ↕</th>
             <th onclick="sortTable('my_price')" style="cursor:pointer;">My Price ↕</th>
             <th onclick="sortTable('cost_price')" style="cursor:pointer;">Cost ↕</th>
+            <th style="cursor:default;white-space:nowrap;">Profit (My Price) ↕</th>
+            <th style="cursor:default;white-space:nowrap;color:#f59e0b;">💡 Profit if Match BB</th>
             <th onclick="sortTable('my_stock')" style="cursor:pointer;">Stock ↕</th>
             <th onclick="sortTable('buybox_price')" style="cursor:pointer;">Buybox Price ↕</th>
             <th onclick="sortTable('buybox_seller')" style="cursor:pointer;">Buybox Seller ↕</th>
@@ -598,7 +600,7 @@ function renderTable() {
 
   const tbody = document.getElementById('productsBody');
   if (!data.length) {
-    tbody.innerHTML = `<tr><td colspan="14"><div class="empty-state"><div class="icon">🔍</div><p>No products match your search/filter.</p></div></td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="16"><div class="empty-state"><div class="icon">🔍</div><p>No products match your search/filter.</p></div></td></tr>`;
     return;
   }
 
@@ -664,6 +666,20 @@ function renderTable() {
         : '<span style="color:#334155;font-size:0.8rem;">—</span>'}</td>
       <td>${myP ? `<div style="font-weight:700;color:#34d399;">${cur}${myP.toLocaleString('en-ZA',{minimumFractionDigits:2})}</div>${diffHtml}` : '<span style="color:#475569">—</span>'}</td>
       <td>${costHtml}</td>
+      <td>${profitHtml || '<span style="color:#334155;font-size:0.8rem;">—</span>'}</td>
+      <td>${(() => {
+        if (!cost || !p.buybox_price) return '<span style="color:#334155;font-size:0.8rem;">—</span>';
+        const bb = Number(p.buybox_price);
+        const bbFee = bb * AMZN_FEE;
+        const bbProfit = bb - bbFee - cost;
+        const bbMargin = ((bbProfit / bb) * 100).toFixed(1);
+        const bbColour = bbProfit >= 0 ? '#10b981' : '#ef4444';
+        return `<div style="font-weight:700;color:${bbColour};">${bbProfit >= 0 ? '+' : ''}${cur}${Math.abs(bbProfit).toLocaleString('en-ZA',{minimumFractionDigits:2})}</div>
+        <div style="font-size:0.7rem;color:#64748b;margin-top:1px;">
+          Fee: <span style="color:#f59e0b;">−${cur}${bbFee.toLocaleString('en-ZA',{minimumFractionDigits:2})}</span>
+          &nbsp;·&nbsp;<span style="color:${bbColour};">${bbMargin}% margin</span>
+        </div>`;
+      })()}</td>
       <td style="text-align:center;">${stockHtml}</td>
       <td>${fmtPrice(p.buybox_price, p.marketplace)}</td>
       <td>${fmtSeller(p.buybox_seller, p.buybox_status)}</td>
