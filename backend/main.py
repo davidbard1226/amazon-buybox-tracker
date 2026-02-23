@@ -834,7 +834,7 @@ def extension_scrape(data: dict):
             "review_count": data.get("review_count"),
             "availability": data.get("availability", "Unknown"),
             "is_amazon_seller": is_amazon,
-            "scraped_at": datetime.utcnow(),
+            "scraped_at": datetime.now(),
         }
 
         # Save to database
@@ -882,109 +882,238 @@ def extension_scrape(data: dict):
         raise HTTPException(status_code=500, detail=f"Failed to save extension data: {str(e)}")
 
 
+# ============================================================================
+# Import Job Store (in-memory, for progress tracking)
+# ============================================================================
+
+# import_job_id -> { status, total, done, updated, skipped, error, finished_at }
+_import_jobs: Dict[str, dict] = {}
+_import_jobs_lock = threading.Lock()
+
+IMPORT_CHUNK_SIZE = 100  # commit every N rows to avoid long transactions
+
+
+def _parse_import_rows(content: bytes, filename: str):
+    """Parse CSV or Excel file bytes into a list of row dicts."""
+    rows = []
+    if filename.endswith(".csv"):
+        text_content = content.decode("utf-8-sig", errors="replace")
+        # Auto-detect delimiter (semicolon or comma)
+        sample = text_content[:2048]
+        delimiter = ";" if sample.count(";") > sample.count(",") else ","
+        reader = csv.DictReader(io.StringIO(text_content), delimiter=delimiter)
+        rows = list(reader)
+    elif filename.endswith(".xlsx") or filename.endswith(".xls"):
+        import openpyxl
+        wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+        ws = wb.active
+        headers = []
+        for i, row in enumerate(ws.iter_rows(values_only=True)):
+            if i == 0:
+                headers = [str(c).strip() if c else "" for c in row]
+            else:
+                rows.append(dict(zip(headers, [str(c).strip() if c is not None else "" for c in row])))
+        wb.close()
+    return rows
+
+
+def _find_col(row, *names):
+    """Flexible column name matching (case-insensitive, ignores spaces/underscores)."""
+    normalised_names = [n.lower().replace(" ", "").replace("_", "") for n in names]
+    for k in row:
+        if k.lower().replace(" ", "").replace("_", "") in normalised_names:
+            val = row[k]
+            return val.strip() if val else None
+    return None
+
+
+def _run_import_job(job_id: str, content: bytes, filename: str):
+    """Background thread: parse file and upsert into DB in chunks, updating progress."""
+    logger.info(f"[import {job_id}] Starting import of {filename}")
+    with _import_jobs_lock:
+        _import_jobs[job_id]["status"] = "parsing"
+
+    try:
+        rows = _parse_import_rows(content, filename)
+    except Exception as e:
+        logger.error(f"[import {job_id}] Parse error: {e}")
+        with _import_jobs_lock:
+            _import_jobs[job_id]["status"] = "error"
+            _import_jobs[job_id]["error"] = f"File parse error: {str(e)}"
+            _import_jobs[job_id]["finished_at"] = datetime.now().isoformat()
+        return
+
+    total = len(rows)
+    with _import_jobs_lock:
+        _import_jobs[job_id]["status"] = "importing"
+        _import_jobs[job_id]["total"] = total
+
+    logger.info(f"[import {job_id}] Parsed {total} rows, importing in chunks of {IMPORT_CHUNK_SIZE}...")
+
+    asin_re = re.compile(r'^[A-Z0-9]{10}$')
+    updated_count = 0
+    skipped_count = 0
+    skipped_reasons = []
+
+    db = SessionLocal()
+    try:
+        for chunk_start in range(0, total, IMPORT_CHUNK_SIZE):
+            chunk = rows[chunk_start: chunk_start + IMPORT_CHUNK_SIZE]
+
+            for row in chunk:
+                asin = (_find_col(row, "ASIN", "asin") or "").upper().strip()
+                if not asin or not asin_re.match(asin):
+                    skipped_count += 1
+                    if len(skipped_reasons) < 50:
+                        skipped_reasons.append({"reason": "Invalid or missing ASIN"})
+                    continue
+
+                sku = _find_col(row, "SKU", "sku", "Seller SKU", "SellerSKU")
+                my_price_raw = _find_col(row, "My Price", "MyPrice", "Price", "my_price", "YourPrice")
+                stock_raw = _find_col(row, "Stock", "Qty", "Quantity", "stock", "StockLevel", "AvailableQty")
+
+                my_price = None
+                if my_price_raw:
+                    try:
+                        my_price = float(re.sub(r'[^\d.]', '', my_price_raw))
+                    except Exception:
+                        pass
+
+                my_stock = None
+                if stock_raw:
+                    try:
+                        my_stock = int(re.sub(r'[^\d]', '', stock_raw))
+                    except Exception:
+                        pass
+
+                try:
+                    existing = db.query(TrackedASIN).filter(TrackedASIN.asin == asin).first()
+                    if existing:
+                        if sku is not None:
+                            existing.sku = sku
+                        if my_price is not None:
+                            existing.my_price = my_price
+                        if my_stock is not None:
+                            existing.my_stock = my_stock
+                        existing.updated_at = datetime.utcnow()
+                    else:
+                        new_rec = TrackedASIN(
+                            asin=asin, sku=sku, my_price=my_price, my_stock=my_stock,
+                            marketplace="amazon.co.za", buybox_status="unknown",
+                            title=f"Pending scrape... ({asin})", scraped_at=None,
+                        )
+                        db.add(new_rec)
+                    updated_count += 1
+                except Exception as e:
+                    logger.warning(f"[import {job_id}] Row error for ASIN {asin}: {e}")
+                    skipped_count += 1
+                    if len(skipped_reasons) < 50:
+                        skipped_reasons.append({"reason": f"DB error for {asin}: {str(e)}"})
+
+            # Commit after each chunk
+            try:
+                db.commit()
+            except Exception as e:
+                logger.error(f"[import {job_id}] Commit error at chunk {chunk_start}: {e}")
+                db.rollback()
+
+            # Update progress
+            done_so_far = min(chunk_start + IMPORT_CHUNK_SIZE, total)
+            with _import_jobs_lock:
+                _import_jobs[job_id]["done"] = done_so_far
+                _import_jobs[job_id]["updated"] = updated_count
+                _import_jobs[job_id]["skipped"] = skipped_count
+
+            logger.info(f"[import {job_id}] Progress: {done_so_far}/{total} rows processed ({updated_count} imported, {skipped_count} skipped)")
+
+    except Exception as e:
+        logger.error(f"[import {job_id}] Unexpected error: {e}")
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        with _import_jobs_lock:
+            _import_jobs[job_id]["status"] = "error"
+            _import_jobs[job_id]["error"] = str(e)
+            _import_jobs[job_id]["finished_at"] = datetime.now().isoformat()
+        return
+    finally:
+        try:
+            db.close()
+        except Exception:
+            pass
+
+    with _import_jobs_lock:
+        _import_jobs[job_id]["status"] = "done"
+        _import_jobs[job_id]["done"] = total
+        _import_jobs[job_id]["updated"] = updated_count
+        _import_jobs[job_id]["skipped"] = skipped_count
+        _import_jobs[job_id]["skipped_reasons"] = skipped_reasons
+        _import_jobs[job_id]["finished_at"] = datetime.now().isoformat()
+
+    logger.info(f"[import {job_id}] ✅ Finished: {updated_count} imported, {skipped_count} skipped")
+
+
 @app.post("/api/import/excel")
-async def import_excel(file: UploadFile = File(...), db: Session = Depends(get_db)):
+async def import_excel(file: UploadFile = File(...)):
     """
-    Import ASIN, SKU, My Price, Stock from Excel (.xlsx) or CSV (.csv).
-    Expected columns (case-insensitive, flexible names):
-      ASIN | SKU | My Price / Price | Stock / Qty / Quantity
+    Start a background import job for ASIN/SKU/Price/Stock from Excel or CSV.
+    Returns a job_id to poll /api/import/excel-status/{job_id} for progress.
+    Handles up to 5000+ rows by processing in chunks of 100 with progress tracking.
     """
     try:
-        content = await file.read()
         filename = (file.filename or "").lower()
-        rows = []
-
-        if filename.endswith(".csv"):
-            # Parse CSV
-            text_content = content.decode("utf-8-sig", errors="replace")
-            reader = csv.DictReader(io.StringIO(text_content))
-            rows = list(reader)
-        elif filename.endswith(".xlsx") or filename.endswith(".xls"):
-            # Parse Excel using openpyxl
-            try:
-                import openpyxl
-            except ImportError:
-                raise HTTPException(status_code=500, detail="openpyxl not installed. Use CSV format instead.")
-            wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
-            ws = wb.active
-            headers = []
-            for i, row in enumerate(ws.iter_rows(values_only=True)):
-                if i == 0:
-                    headers = [str(c).strip() if c else "" for c in row]
-                else:
-                    rows.append(dict(zip(headers, [str(c).strip() if c is not None else "" for c in row])))
-        else:
+        if not (filename.endswith(".csv") or filename.endswith(".xlsx") or filename.endswith(".xls")):
             raise HTTPException(status_code=400, detail="Only .xlsx, .xls, or .csv files are supported")
 
-        # Flexible column name matching
-        def find_col(row, *names):
-            for k in row:
-                if k.lower().replace(" ", "").replace("_", "") in [n.lower().replace(" ", "").replace("_", "") for n in names]:
-                    return row[k].strip() if row[k] else None
-            return None
+        content = await file.read()
+        if not content:
+            raise HTTPException(status_code=400, detail="File is empty")
 
-        updated = []
-        skipped = []
-        asin_re = re.compile(r'^[A-Z0-9]{10}$')
+        # Check openpyxl available for Excel files
+        if filename.endswith(".xlsx") or filename.endswith(".xls"):
+            try:
+                import openpyxl  # noqa
+            except ImportError:
+                raise HTTPException(status_code=500, detail="openpyxl not installed. Use CSV format instead.")
 
-        for row in rows:
-            asin = (find_col(row, "ASIN", "asin") or "").upper().strip()
-            if not asin or not asin_re.match(asin):
-                skipped.append({"row": str(row), "reason": "Invalid or missing ASIN"})
-                continue
+        job_id = str(uuid.uuid4())
+        with _import_jobs_lock:
+            _import_jobs[job_id] = {
+                "job_id": job_id,
+                "status": "queued",
+                "filename": file.filename,
+                "total": 0,
+                "done": 0,
+                "updated": 0,
+                "skipped": 0,
+                "skipped_reasons": [],
+                "error": None,
+                "started_at": datetime.now().isoformat(),
+                "finished_at": None,
+            }
 
-            sku = find_col(row, "SKU", "sku", "Seller SKU", "SellerSKU")
-            my_price_raw = find_col(row, "My Price", "MyPrice", "Price", "my_price", "YourPrice")
-            stock_raw = find_col(row, "Stock", "Qty", "Quantity", "stock", "StockLevel", "AvailableQty")
+        t = threading.Thread(target=_run_import_job, args=(job_id, content, filename), daemon=True)
+        t.start()
 
-            my_price = None
-            if my_price_raw:
-                try:
-                    my_price = float(re.sub(r'[^\d.]', '', my_price_raw))
-                except Exception:
-                    pass
-
-            my_stock = None
-            if stock_raw:
-                try:
-                    my_stock = int(re.sub(r'[^\d]', '', stock_raw))
-                except Exception:
-                    pass
-
-            # Upsert into DB
-            existing = db.query(TrackedASIN).filter(TrackedASIN.asin == asin).first()
-            if existing:
-                if sku is not None: existing.sku = sku
-                if my_price is not None: existing.my_price = my_price
-                if my_stock is not None: existing.my_stock = my_stock
-                existing.updated_at = datetime.utcnow()
-            else:
-                # Create placeholder record — will be scraped on next extension pass
-                new_rec = TrackedASIN(
-                    asin=asin, sku=sku, my_price=my_price, my_stock=my_stock,
-                    marketplace="amazon.co.za", buybox_status="unknown",
-                    title=f"Pending scrape... ({asin})", scraped_at=None,
-                )
-                db.add(new_rec)
-
-            updated.append({"asin": asin, "sku": sku, "my_price": my_price, "my_stock": my_stock})
-
-        db.commit()
-        logger.info(f"Excel import: {len(updated)} updated, {len(skipped)} skipped")
-        return {
-            "success": True,
-            "updated": len(updated),
-            "skipped": len(skipped),
-            "records": updated,
-            "skipped_records": skipped,
-            "message": f"✅ {len(updated)} ASINs imported successfully"
-        }
+        logger.info(f"Started import job {job_id} for file '{file.filename}'")
+        return {"job_id": job_id, "status": "queued", "filename": file.filename}
 
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Excel import error: {e}")
-        raise HTTPException(status_code=500, detail=f"Import failed: {str(e)}")
+        logger.error(f"Excel import start error: {e}")
+        raise HTTPException(status_code=500, detail=f"Import failed to start: {str(e)}")
+
+
+@app.get("/api/import/excel-status/{job_id}")
+def import_excel_status(job_id: str):
+    """Poll the progress of a background import job."""
+    with _import_jobs_lock:
+        job = _import_jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Import job not found")
+    return job
 
 
 @app.get("/api/extension/config")

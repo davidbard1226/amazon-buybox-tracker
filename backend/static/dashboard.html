@@ -232,10 +232,28 @@ tr:hover td{background:rgba(255,255,255,0.02);}
     <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;">
       <input type="file" id="excelFile" accept=".xlsx,.xls,.csv"
         style="background:#0f172a;border:1px solid #334155;color:#e2e8f0;padding:10px;border-radius:8px;font-size:0.9rem;flex:1;min-width:200px;"/>
-      <button class="btn btn-primary" onclick="importExcel()">📤 Import File</button>
+      <button class="btn btn-primary" id="importBtn" onclick="importExcel()">📤 Import File</button>
       <a href="#" onclick="downloadTemplate()" style="color:#f97316;font-size:0.85rem;text-decoration:none;">⬇️ Download Template</a>
     </div>
     <div id="importAlert" style="margin-top:12px;"></div>
+
+    <!-- Progress Bar (hidden by default) -->
+    <div id="importProgressWrap" style="display:none;margin-top:16px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+        <span id="importProgressLabel" style="font-size:0.9rem;color:#93c5fd;font-weight:600;">Importing...</span>
+        <span id="importProgressPct" style="font-size:0.9rem;color:#f97316;font-weight:700;">0%</span>
+      </div>
+      <div style="height:14px;background:#0f172a;border-radius:7px;overflow:hidden;border:1px solid #334155;">
+        <div id="importProgressBar" style="height:100%;width:0%;background:linear-gradient(90deg,#f97316,#fb923c);border-radius:7px;transition:width 0.4s ease;"></div>
+      </div>
+      <div id="importProgressStats" style="display:flex;gap:20px;margin-top:8px;font-size:0.82rem;color:#94a3b8;">
+        <span>📥 <b id="importDoneCount">0</b> processed</span>
+        <span>✅ <b id="importOkCount">0</b> imported</span>
+        <span>⚠️ <b id="importSkipCount">0</b> skipped</span>
+        <span>📄 <b id="importTotalCount">0</b> total rows</span>
+      </div>
+    </div>
+
     <div id="importResult" style="margin-top:12px;"></div>
   </div>
 
@@ -773,6 +791,28 @@ async function viewHistory(asin) {
 }
 
 // ── Excel Import ─────────────────────────────────────────────────
+// Import polling timer
+let _importPollTimer = null;
+
+function _stopImportPoll() {
+  if (_importPollTimer) { clearInterval(_importPollTimer); _importPollTimer = null; }
+}
+
+function _setImportProgress(done, total, updated, skipped, label) {
+  const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+  document.getElementById('importProgressBar').style.width = pct + '%';
+  document.getElementById('importProgressPct').textContent = pct + '%';
+  document.getElementById('importProgressLabel').textContent = label || 'Importing...';
+  document.getElementById('importDoneCount').textContent = done.toLocaleString();
+  document.getElementById('importOkCount').textContent = updated.toLocaleString();
+  document.getElementById('importSkipCount').textContent = skipped.toLocaleString();
+  document.getElementById('importTotalCount').textContent = total.toLocaleString();
+}
+
+function _showImportProgress(visible) {
+  document.getElementById('importProgressWrap').style.display = visible ? 'block' : 'none';
+}
+
 async function importExcel() {
   const fileInput = document.getElementById('excelFile');
   const file = fileInput.files[0];
@@ -783,57 +823,93 @@ async function importExcel() {
     showAlert('importAlert', '❌ Only .xlsx, .xls or .csv files are supported.', 'error'); return;
   }
 
-  showAlert('importAlert', `<span class="loading"></span>Uploading <b>${file.name}</b>...`, 'info');
+  // Reset UI
+  _stopImportPoll();
   document.getElementById('importResult').innerHTML = '';
+  document.getElementById('importAlert').innerHTML = '';
+  _setImportProgress(0, 0, 0, 0, '⏳ Uploading file...');
+  _showImportProgress(true);
+
+  const btn = document.getElementById('importBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="loading"></span>Uploading...';
 
   const formData = new FormData();
   formData.append('file', file);
 
+  let jobId = null;
   try {
     const r = await fetch(API + '/api/import/excel', { method: 'POST', body: formData });
     const d = await r.json();
     if (!r.ok) {
-      showAlert('importAlert', `❌ Import failed: ${d.detail || 'Unknown error'}`, 'error');
+      _showImportProgress(false);
+      btn.disabled = false; btn.innerHTML = '📤 Import File';
+      showAlert('importAlert', `❌ Upload failed: ${d.detail || 'Unknown error'}`, 'error');
       return;
     }
-    showAlert('importAlert', `✅ ${d.message || 'Import complete'}`, 'success');
-
-    // Show detailed results
-    const skippedHtml = d.skipped_records && d.skipped_records.length > 0 ? `
-      <div style="margin-top:10px;background:#ef444411;border:1px solid #ef444433;border-radius:8px;padding:10px 14px;">
-        <div style="font-size:0.8rem;color:#ef4444;font-weight:600;margin-bottom:4px;">⚠️ ${d.skipped} rows skipped:</div>
-        ${d.skipped_records.slice(0,10).map(s=>`<div style="font-size:0.75rem;color:#94a3b8;">${s.reason}</div>`).join('')}
-        ${d.skipped_records.length > 10 ? `<div style="font-size:0.75rem;color:#94a3b8;">...and ${d.skipped_records.length-10} more</div>` : ''}
-      </div>` : '';
-
-    const recordsHtml = d.records && d.records.length > 0 ? `
-      <table style="width:100%;font-size:0.82rem;border-collapse:collapse;margin-top:12px;">
-        <thead><tr style="background:#0f172a;">
-          <th style="padding:8px;text-align:left;color:#94a3b8;">ASIN</th>
-          <th style="padding:8px;text-align:left;color:#94a3b8;">SKU</th>
-          <th style="padding:8px;text-align:left;color:#94a3b8;">My Price</th>
-          <th style="padding:8px;text-align:left;color:#94a3b8;">Stock</th>
-        </tr></thead>
-        <tbody>${d.records.slice(0,20).map(rec=>`
-          <tr style="border-bottom:1px solid #1e293b;">
-            <td style="padding:8px;font-family:monospace;color:#94a3b8;">${rec.asin}</td>
-            <td style="padding:8px;color:#e2e8f0;">${rec.sku || '—'}</td>
-            <td style="padding:8px;color:#34d399;">${rec.my_price ? 'R'+Number(rec.my_price).toLocaleString('en-ZA',{minimumFractionDigits:2}) : '—'}</td>
-            <td style="padding:8px;color:${rec.my_stock > 10 ? '#10b981' : rec.my_stock > 0 ? '#f59e0b' : '#ef4444'}">${rec.my_stock !== null && rec.my_stock !== undefined ? rec.my_stock : '—'}</td>
-          </tr>`).join('')}
-        </tbody>
-      </table>
-      ${d.records.length > 20 ? `<div style="font-size:0.8rem;color:#94a3b8;margin-top:6px;">...and ${d.records.length-20} more rows imported</div>` : ''}` : '';
-
-    document.getElementById('importResult').innerHTML = skippedHtml + recordsHtml;
-
-    // Reload dashboard to reflect new data
-    allProducts = [];
-    loadDashboard();
-    fileInput.value = '';
+    jobId = d.job_id;
+    showAlert('importAlert', `<span class="loading"></span>File uploaded — importing <b>${file.name}</b> in the background...`, 'info');
+    btn.innerHTML = '<span class="loading"></span>Importing...';
   } catch(e) {
+    _showImportProgress(false);
+    btn.disabled = false; btn.innerHTML = '📤 Import File';
     showAlert('importAlert', `❌ Upload error: ${e.message}`, 'error');
+    return;
   }
+
+  // Poll for progress every 800ms
+  _importPollTimer = setInterval(async () => {
+    try {
+      const pr = await fetch(API + '/api/import/excel-status/' + jobId);
+      if (!pr.ok) return; // transient error, keep polling
+      const pd = await pr.json();
+
+      const status = pd.status;
+      const done = pd.done || 0;
+      const total = pd.total || 0;
+      const updated = pd.updated || 0;
+      const skipped = pd.skipped || 0;
+
+      if (status === 'queued') {
+        _setImportProgress(0, 0, 0, 0, '⏳ Queued — starting import...');
+      } else if (status === 'parsing') {
+        _setImportProgress(0, 0, 0, 0, '📂 Parsing file...');
+      } else if (status === 'importing') {
+        const label = total > 0
+          ? `📥 Importing row ${done.toLocaleString()} of ${total.toLocaleString()}...`
+          : '📥 Importing...';
+        _setImportProgress(done, total, updated, skipped, label);
+      } else if (status === 'done') {
+        _stopImportPoll();
+        _setImportProgress(total, total, updated, skipped, '✅ Import complete!');
+        document.getElementById('importProgressBar').style.background = 'linear-gradient(90deg,#10b981,#34d399)';
+        showAlert('importAlert', `✅ Successfully imported <b>${updated.toLocaleString()}</b> ASINs from <b>${file.name}</b>${skipped > 0 ? ` (${skipped.toLocaleString()} rows skipped)` : ''}.`, 'success');
+        btn.disabled = false; btn.innerHTML = '📤 Import File';
+
+        // Show skipped summary if any
+        const reasons = pd.skipped_reasons || [];
+        const skippedHtml = reasons.length > 0 ? `
+          <div style="margin-top:10px;background:#ef444411;border:1px solid #ef444433;border-radius:8px;padding:10px 14px;">
+            <div style="font-size:0.8rem;color:#ef4444;font-weight:600;margin-bottom:4px;">⚠️ ${skipped.toLocaleString()} rows skipped (first ${Math.min(reasons.length,50)} shown):</div>
+            ${reasons.slice(0,50).map(s=>`<div style="font-size:0.75rem;color:#94a3b8;">${s.reason}</div>`).join('')}
+          </div>` : '';
+        document.getElementById('importResult').innerHTML = skippedHtml;
+
+        // Reload dashboard to reflect new data
+        allProducts = [];
+        loadDashboard();
+        fileInput.value = '';
+
+      } else if (status === 'error') {
+        _stopImportPoll();
+        _showImportProgress(false);
+        btn.disabled = false; btn.innerHTML = '📤 Import File';
+        showAlert('importAlert', `❌ Import error: ${pd.error || 'Unknown error'}`, 'error');
+      }
+    } catch(e) {
+      // Transient network error — keep polling
+    }
+  }, 800);
 }
 
 function downloadTemplate() {
@@ -883,7 +959,7 @@ async function submitBulk() {
   const btn = document.getElementById('bulkBtn');
   btn.disabled = true;
   btn.innerHTML = `<span class="loading"></span>Running pool (${CONCURRENT_TABS} tabs)...`;
-  showAlert('bulkAlert', `<span class="loading"></span>Starting concurrent pool — ${CONCURRENT_TABS} tabs open at a time for ${asins.length} ASINs...`, 'info');
+  showAlert('bulkAlert', `<span class="loading"></span>Starting — opening ${Math.min(CONCURRENT_TABS, asins.length)} Amazon tab(s) for ${asins.length} ASIN(s)... Make sure the Chrome Extension is installed &amp; configured with your backend URL in Extension Settings.`, 'info');
   document.getElementById('bulkResult').innerHTML = '';
   _stopBulkPoll();
 
@@ -910,7 +986,7 @@ async function submitBulk() {
   let failedAsins = [];     // array of {asin, error}
   let finished = false;
   const tabOpenedAt = {};   // asin → timestamp when tab was opened (for timeout)
-  const TAB_TIMEOUT_MS = 120000; // 120s timeout per tab (Amazon can be slow)
+  const TAB_TIMEOUT_MS = 90000; // 90s timeout per tab
 
   // ── Step 2: open next tab(s) — must be called synchronously from user gesture
   //    OR wrapped in setTimeout(0) for subsequent calls (avoids popup blocker)
@@ -981,7 +1057,7 @@ async function submitBulk() {
         if (failedAsins.find(x => x.asin === asin)) return;
         const openedAt = tabOpenedAt[asin];
         if (openedAt && (now - openedAt) > TAB_TIMEOUT_MS) {
-          failedAsins.push({asin, error: 'Timeout (120s)'});
+          failedAsins.push({asin, error: 'Timeout — Extension may not be configured (check Extension → Settings tab)'});
           activeCount = Math.max(0, activeCount - 1);
           newlyDone = true;
           if (queueIdx < asins.length) setTimeout(() => openNextTab(true), 0);
@@ -1030,11 +1106,18 @@ function _renderBulkExtensionProgress(opened, total, done, failed) {
       </tbody>
     </table>` : '';
 
+  const failedHtml = failed.length > 0 ? `
+    <div style="margin-top:10px;padding:10px;background:#1a0a0a;border:1px solid #7f1d1d;border-radius:8px;">
+      <div style="color:#ef4444;font-size:0.8rem;font-weight:600;margin-bottom:6px;">⏱️ Timed Out (${failed.length}) — Extension may not be sending data to backend</div>
+      <div style="color:#fca5a5;font-size:0.75rem;margin-bottom:8px;">Fix: Open Extension popup → Settings tab → verify Backend URL is correct → Save</div>
+      ${failed.map(f=>`<div style="font-family:monospace;font-size:0.78rem;color:#94a3b8;padding:2px 0;">${f.asin}</div>`).join('')}
+    </div>` : '';
+
   document.getElementById('bulkResult').innerHTML = `
     <div style="margin-top:14px;">
       <div style="display:flex;justify-content:space-between;font-size:0.85rem;color:#94a3b8;margin-bottom:6px;">
         <span>${done.length === total ? '✅ Complete' : `⏳ Scraped ${done.length}/${total} ASINs via extension...`}
-          ${failed.length > 0 ? `<span style="color:#ef4444;margin-left:8px;">· ${failed.length} timed out</span>` : ''}
+          ${failed.length > 0 ? `<span style="color:#ef4444;margin-left:8px;">· ${failed.length} timed out <span title="${failed[0]?.error || 'Timeout'}">⚠️</span></span>` : ''}
         </span>
         <span style="color:${done.length===total?'#10b981':'#f59e0b'};font-weight:700;">${pct}%</span>
       </div>
@@ -1042,60 +1125,12 @@ function _renderBulkExtensionProgress(opened, total, done, failed) {
         <div style="height:100%;width:${pct}%;background:${barColor};border-radius:4px;transition:width 0.5s ease;"></div>
       </div>
       ${resultsHtml}
+      ${failedHtml}
     </div>`;
 }
 
 
 // ── Excel Import ──────────────────────────────────────────────────
-async function importExcel() {
-  const fileInput = document.getElementById('excelFile');
-  const file = fileInput.files[0];
-  if (!file) { showAlert('importAlert', '⚠️ Please select an Excel or CSV file first', 'error'); return; }
-
-  const formData = new FormData();
-  formData.append('file', file);
-
-  showAlert('importAlert', `<span class="loading"></span>Importing <b>${file.name}</b>...`, 'info');
-  document.getElementById('importResult').innerHTML = '';
-
-  try {
-    const r = await fetch(API + '/api/import/excel', { method: 'POST', body: formData });
-    const d = await r.json();
-
-    if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
-
-    showAlert('importAlert', `✅ ${d.message} — ${d.skipped} rows skipped`, 'success');
-
-    // Show results table
-    if (d.records && d.records.length > 0) {
-      document.getElementById('importResult').innerHTML = `
-        <div style="margin-top:12px;">
-          <table style="width:100%;font-size:0.82rem;border-collapse:collapse;">
-            <thead><tr style="background:#0f172a;">
-              <th style="padding:8px;text-align:left;color:#94a3b8;">ASIN</th>
-              <th style="padding:8px;text-align:left;color:#94a3b8;">SKU</th>
-              <th style="padding:8px;text-align:left;color:#94a3b8;">My Price</th>
-              <th style="padding:8px;text-align:left;color:#94a3b8;">Stock</th>
-            </tr></thead>
-            <tbody>${d.records.map(r => `
-              <tr style="border-bottom:1px solid #1e293b;">
-                <td style="padding:8px;font-family:monospace;color:#94a3b8;">${r.asin}</td>
-                <td style="padding:8px;color:#e2e8f0;">${r.sku || '—'}</td>
-                <td style="padding:8px;color:#34d399;">${r.my_price ? 'R' + Number(r.my_price).toLocaleString('en-ZA', {minimumFractionDigits:2}) : '—'}</td>
-                <td style="padding:8px;color:${r.my_stock > 10 ? '#10b981' : r.my_stock > 0 ? '#f59e0b' : '#ef4444'};">${r.my_stock !== null && r.my_stock !== undefined ? r.my_stock : '—'}</td>
-              </tr>`).join('')}
-            </tbody>
-          </table>
-        </div>`;
-    }
-
-    // Reload dashboard to show updated data
-    await loadDashboard();
-    fileInput.value = '';
-  } catch(e) {
-    showAlert('importAlert', `❌ Import failed: ${e.message}`, 'error');
-  }
-}
 
 function downloadTemplate() {
   // Generate a CSV template for download
