@@ -756,13 +756,13 @@ async function refreshSelected() {
     
     showAlert('alertBox', `<span class="loading"></span>Batch ${currentBatch + 1}/${totalBatches}: Opening ${batch.length} background tab(s)... (${batchEnd}/${toRefresh.length} total)`, 'info');
     
-    // Open all tabs in this batch in background (new window, not focused)
+    // Open all tabs in this batch in a SEPARATE window (not in dashboard window)
     batch.forEach((p, index) => {
       setTimeout(() => {
         const domain = (p.marketplace || 'amazon.co.za').replace('www.','');
         const url = `https://www.${domain}/dp/${p.asin}?auto_scrape=1`;
-        // Open in new window with minimal size and don't focus it
-        window.open(url, '_blank');
+        // Open in separate popup window with specific name so tabs group together
+        window.open(url, 'AmazonScraper', 'width=800,height=600,location=yes,scrollbars=yes');
       }, index * 1000); // 1s delay between each tab in the batch
     });
     
@@ -908,13 +908,13 @@ async function refreshAll() {
     
     showAlert('alertBox', `<span class="loading"></span>Batch ${currentBatch + 1}/${totalBatches}: Opening ${batch.length} background tab(s)... (${batchEnd}/${allProducts.length} total)`, 'info');
     
-    // Open all tabs in this batch in background (new window, not focused)
+    // Open all tabs in this batch in a SEPARATE window (not in dashboard window)
     batch.forEach((p, index) => {
       setTimeout(() => {
         const domain = (p.marketplace || 'amazon.co.za').replace('www.','');
         const url = `https://www.${domain}/dp/${p.asin}?auto_scrape=1&dashboard=${encodeURIComponent(window.location.origin)}`;
-        // Open in new window with minimal size and don't focus it
-        window.open(url, '_blank');
+        // Open in separate popup window with specific name so tabs group together
+        window.open(url, 'AmazonScraper', 'width=800,height=600,location=yes,scrollbars=yes');
       }, index * 1000); // 1s delay between each tab in the batch
     });
     
