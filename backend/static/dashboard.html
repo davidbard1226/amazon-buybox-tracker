@@ -735,21 +735,55 @@ function updateSelectedBadge() {
 async function refreshSelected() {
   if (!selectedAsins.size) return;
   const toRefresh = allProducts.filter(p => selectedAsins.has(p.asin));
-  showAlert('alertBox', `<span class="loading"></span>Opening ${toRefresh.length} tab(s) for selected products...`, 'info');
-  let i = 0;
-  const openNext = () => {
-    if (i >= toRefresh.length) {
-      setTimeout(() => loadDashboard(), 5000);
+  const MAX_TABS = 3; // Limit to 3 tabs at a time to save memory
+  const SCRAPE_WAIT = 8000; // 8s per tab to complete scraping
+  
+  showAlert('alertBox', `<span class="loading"></span>Starting background refresh of ${toRefresh.length} product(s) — Scraping max ${MAX_TABS} at a time...`, 'info');
+  
+  let currentBatch = 0;
+  const totalBatches = Math.ceil(toRefresh.length / MAX_TABS);
+  
+  const scrapeBatch = async () => {
+    if (currentBatch >= totalBatches) {
+      showAlert('alertBox', '✅ All batches complete! Reloading dashboard...', 'success');
+      setTimeout(() => loadDashboard(), 3000);
       return;
     }
-    const p = toRefresh[i++];
-    const domain = (p.marketplace || 'amazon.co.za').replace('www.','');
-    window.open(`https://www.${domain}/dp/${p.asin}?auto_scrape=1`, '_blank');
-    setTimeout(openNext, 3000);
+    
+    const batchStart = currentBatch * MAX_TABS;
+    const batchEnd = Math.min(batchStart + MAX_TABS, toRefresh.length);
+    const batch = toRefresh.slice(batchStart, batchEnd);
+    
+    showAlert('alertBox', `<span class="loading"></span>Batch ${currentBatch + 1}/${totalBatches}: Scraping ${batch.length} product(s) in background... (${batchEnd}/${toRefresh.length} total)`, 'info');
+    
+    // Scrape all products in this batch using extension's background tabs
+    const promises = batch.map(p => {
+      return new Promise((resolve) => {
+        const domain = (p.marketplace || 'amazon.co.za').replace('www.','');
+        chrome.runtime.sendMessage({
+          action: 'scrapeAsinUrl',
+          asin: p.asin,
+          marketplace: domain
+        }, (response) => {
+          if (response && response.success) {
+            console.log(`✅ Scraped ${p.asin} in background`);
+          } else {
+            console.warn(`⚠️ Failed to scrape ${p.asin}:`, response?.error);
+          }
+          resolve();
+        });
+      });
+    });
+    
+    // Wait for all in this batch to complete
+    await Promise.all(promises);
+    
+    currentBatch++;
+    // Small delay before next batch
+    setTimeout(scrapeBatch, 2000);
   };
-  openNext();
-  showAlert('alertBox', `⏳ Opening ${toRefresh.length} tab(s). Extension will scrape each one. Reloading in ~${toRefresh.length*3+10}s`, 'info');
-  setTimeout(() => loadDashboard(), (toRefresh.length * 3 + 10) * 1000);
+  
+  scrapeBatch();
 }
 
 // ── Google Sheet Cost Sync ────────────────────────────────────────
@@ -864,23 +898,56 @@ function quickRefresh(asin, market) {
 
 async function refreshAll() {
   if (!allProducts.length) { showAlert('alertBox', '⚠️ No products tracked yet.', 'error'); return; }
-  showAlert('alertBox', `<span class="loading"></span>Opening tabs for all ${allProducts.length} products — extension will scrape each one...`, 'info');
-  // Open tabs one at a time with a delay to avoid overwhelming Amazon
-  let i = 0;
-  const openNext = () => {
-    if (i >= allProducts.length) {
-      setTimeout(() => loadDashboard(), 5000);
+  
+  const MAX_TABS = 3; // Limit to 3 tabs at a time to save memory
+  const SCRAPE_WAIT = 8000; // 8s per tab to complete scraping
+  
+  showAlert('alertBox', `<span class="loading"></span>Starting background refresh of all ${allProducts.length} products — Scraping max ${MAX_TABS} at a time...`, 'info');
+  
+  let currentBatch = 0;
+  const totalBatches = Math.ceil(allProducts.length / MAX_TABS);
+  
+  const scrapeBatch = async () => {
+    if (currentBatch >= totalBatches) {
+      showAlert('alertBox', '✅ All batches complete! Reloading dashboard...', 'success');
+      setTimeout(() => loadDashboard(), 3000);
       return;
     }
-    const p = allProducts[i++];
-    const domain = p.marketplace || 'amazon.co.za';
-    const url = `https://www.${domain}/dp/${p.asin}?auto_scrape=1&dashboard=${encodeURIComponent(window.location.origin)}`;
-    window.open(url, '_blank');
-    setTimeout(openNext, 3000); // 3s between tabs
+    
+    const batchStart = currentBatch * MAX_TABS;
+    const batchEnd = Math.min(batchStart + MAX_TABS, allProducts.length);
+    const batch = allProducts.slice(batchStart, batchEnd);
+    
+    showAlert('alertBox', `<span class="loading"></span>Batch ${currentBatch + 1}/${totalBatches}: Scraping ${batch.length} product(s) in background... (${batchEnd}/${allProducts.length} total)`, 'info');
+    
+    // Scrape all products in this batch using extension's background tabs
+    const promises = batch.map(p => {
+      return new Promise((resolve) => {
+        const domain = (p.marketplace || 'amazon.co.za').replace('www.','');
+        chrome.runtime.sendMessage({
+          action: 'scrapeAsinUrl',
+          asin: p.asin,
+          marketplace: domain
+        }, (response) => {
+          if (response && response.success) {
+            console.log(`✅ Scraped ${p.asin} in background`);
+          } else {
+            console.warn(`⚠️ Failed to scrape ${p.asin}:`, response?.error);
+          }
+          resolve();
+        });
+      });
+    });
+    
+    // Wait for all in this batch to complete
+    await Promise.all(promises);
+    
+    currentBatch++;
+    // Small delay before next batch
+    setTimeout(scrapeBatch, 2000);
   };
-  openNext();
-  showAlert('alertBox', `⏳ Opening ${allProducts.length} tabs (3s apart). Extension will scrape each and close the tab. Dashboard reloads in ~${allProducts.length * 3 + 10}s`, 'info');
-  setTimeout(() => loadDashboard(), (allProducts.length * 3 + 10) * 1000);
+  
+  scrapeBatch();
 }
 
 async function removeASIN(asin) {
