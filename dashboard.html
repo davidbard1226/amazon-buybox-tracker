@@ -572,8 +572,8 @@ function renderTable() {
           const fees = p.my_price * 0.06;
           const profit = p.my_price - p.cost_price - fees;
           const margin = (profit / p.my_price * 100).toFixed(1);
-          const color = profit > 0 ? '#10b981' : '#ef4444';
-          return `<div style="font-size:0.7rem;margin-top:4px;color:${color};">After Amazon fees R${fees.toFixed(2)}, my profit is R${profit.toFixed(2)} (${margin}%)</div>`;
+          const profitColor = profit > 0 ? '#10b981' : '#ef4444';
+          return `<div style="font-size:0.7rem;margin-top:4px;color:#64748b;">After Amazon fees R${fees.toFixed(2)}, my profit is <strong style="color:${profitColor};">R${profit.toFixed(2)}</strong> (${margin}%)</div>`;
         }
         return '';
       })()}` : '<span style="color:#475569">—</span>'}</td>
