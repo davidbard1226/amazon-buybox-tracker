@@ -567,7 +567,16 @@ function renderTable() {
       </td>
       <td><span class="asin-code">${p.asin}</span></td>
       <td><span style="font-family:monospace;font-size:0.8rem;color:#94a3b8;">${p.sku || '—'}</span></td>
-      <td>${p.my_price ? `<span class="price-val" style="color:#34d399;">${CURRENCY[p.marketplace]||'R'}${Number(p.my_price).toLocaleString('en-ZA',{minimumFractionDigits:2})}</span>${priceDiffHtml}` : '<span style="color:#475569">—</span>'}</td>
+      <td>${p.my_price ? `<span class="price-val" style="color:#34d399;">${CURRENCY[p.marketplace]||'R'}${Number(p.my_price).toLocaleString('en-ZA',{minimumFractionDigits:2})}</span>${priceDiffHtml}${(() => {
+        if (p.cost_price && p.my_price) {
+          const fees = p.my_price * 0.06;
+          const profit = p.my_price - p.cost_price - fees;
+          const margin = (profit / p.my_price * 100).toFixed(1);
+          const color = profit > 0 ? '#10b981' : '#ef4444';
+          return `<div style="font-size:0.7rem;margin-top:4px;color:${color};">After Amazon fees R${fees.toFixed(2)}, my profit is R${profit.toFixed(2)} (${margin}%)</div>`;
+        }
+        return '';
+      })()}` : '<span style="color:#475569">—</span>'}</td>
       <td>${stockHtml}</td>
       <td>${fmtPrice(p.buybox_price, p.marketplace)}</td>
       <td>${fmtSeller(p.buybox_seller, p.buybox_status)}</td>
@@ -849,7 +858,7 @@ async function submitBulk() {
   const btn = document.getElementById('bulkBtn');
   btn.disabled = true;
   btn.innerHTML = `<span class="loading"></span>Running pool (${CONCURRENT_TABS} tabs)...`;
-  showAlert('bulkAlert', `<span class="loading"></span>Starting concurrent pool — ${CONCURRENT_TABS} tabs open at a time for ${asins.length} ASINs...`, 'info');
+  showAlert('bulkAlert', `<span class="loading"></span>Starting — opening ${Math.min(CONCURRENT_TABS, asins.length)} Amazon tab(s) for ${asins.length} ASIN(s)... Make sure the Chrome Extension is installed &amp; configured with your backend URL in Extension Settings.`, 'info');
   document.getElementById('bulkResult').innerHTML = '';
   _stopBulkPoll();
 
@@ -874,7 +883,7 @@ async function submitBulk() {
   let failedAsins = [];     // array of {asin, error}
   let finished = false;
   const tabOpenedAt = {};   // asin → timestamp when tab was opened (for timeout)
-  const TAB_TIMEOUT_MS = 120000; // 120s timeout per tab (Amazon can be slow)
+  const TAB_TIMEOUT_MS = 90000; // 90s timeout per tab
 
   // ── Step 2: open next tab(s) — synchronous from user gesture for first batch,
   //    setTimeout-wrapped for subsequent calls (avoids popup blocker)
@@ -940,7 +949,7 @@ async function submitBulk() {
         if (failedAsins.find(x => x.asin === asin)) return;
         const openedAt = tabOpenedAt[asin];
         if (openedAt && (now - openedAt) > TAB_TIMEOUT_MS) {
-          failedAsins.push({asin, error: 'Timeout (120s)'});
+          failedAsins.push({asin, error: 'Timeout — Extension may not be configured (check Extension → Settings tab)'});
           activeCount = Math.max(0, activeCount - 1);
           newlyDone = true;
           if (queueIdx < asins.length) setTimeout(() => openNextTab(true), 0);
@@ -989,11 +998,18 @@ function _renderBulkExtensionProgress(opened, total, done, failed) {
       </tbody>
     </table>` : '';
 
+  const failedHtml = failed.length > 0 ? `
+    <div style="margin-top:10px;padding:10px;background:#1a0a0a;border:1px solid #7f1d1d;border-radius:8px;">
+      <div style="color:#ef4444;font-size:0.8rem;font-weight:600;margin-bottom:6px;">⏱️ Timed Out (${failed.length}) — Extension may not be sending data to backend</div>
+      <div style="color:#fca5a5;font-size:0.75rem;margin-bottom:8px;">Fix: Open Extension popup → Settings tab → verify Backend URL is correct → Save</div>
+      ${failed.map(f=>`<div style="font-family:monospace;font-size:0.78rem;color:#94a3b8;padding:2px 0;">${f.asin}</div>`).join('')}
+    </div>` : '';
+
   document.getElementById('bulkResult').innerHTML = `
     <div style="margin-top:14px;">
       <div style="display:flex;justify-content:space-between;font-size:0.85rem;color:#94a3b8;margin-bottom:6px;">
         <span>${done.length === total ? '✅ Complete' : `⏳ Scraped ${done.length}/${total} ASINs via extension...`}
-          ${failed.length > 0 ? `<span style="color:#ef4444;margin-left:8px;">· ${failed.length} timed out</span>` : ''}
+          ${failed.length > 0 ? `<span style="color:#ef4444;margin-left:8px;">· ${failed.length} timed out <span title="${failed[0]?.error || 'Timeout'}">⚠️</span></span>` : ''}
         </span>
         <span style="color:${done.length===total?'#10b981':'#f59e0b'};font-weight:700;">${pct}%</span>
       </div>
@@ -1001,6 +1017,7 @@ function _renderBulkExtensionProgress(opened, total, done, failed) {
         <div style="height:100%;width:${pct}%;background:${barColor};border-radius:4px;transition:width 0.5s ease;"></div>
       </div>
       ${resultsHtml}
+      ${failedHtml}
     </div>`;
 }
 
