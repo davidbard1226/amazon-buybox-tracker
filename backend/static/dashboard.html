@@ -689,6 +689,7 @@ function renderTable() {
         <div style="display:flex;gap:6px;">
           <button class="btn btn-primary btn-sm" title="Refresh via Extension" onclick="quickRefresh('${p.asin}','${p.marketplace}')">🔄</button>
           <button class="btn btn-sm" style="background:#334155;color:#e2e8f0;" title="View Price History" onclick="viewHistory('${p.asin}')">📈</button>
+          ${p.sku ? `<button class="btn btn-sm" style="background:#065f46;color:#6ee7b7;border:1px solid #10b981;" title="Push My Price to Amazon via SP-API" onclick="pushPrice('${p.asin}','${(p.sku||'').replace(/'/g,"\\'")}',${p.my_price||0})">💸 Push</button>` : ''}
           <button class="btn btn-danger btn-sm" title="Remove" onclick="removeASIN('${p.asin}')">🗑</button>
         </div>
       </td>
@@ -924,6 +925,39 @@ async function refreshAll() {
   };
   
   openBatch();
+}
+
+// ── Push Price to Amazon via SP-API ──────────────────────────────
+async function pushPrice(asin, sku, currentPrice) {
+  if (!sku) {
+    showAlert('alertBox', `⚠️ No SKU set for ${asin} — add a SKU first (click ✏️ next to the SKU column).`, 'error');
+    return;
+  }
+  const priceStr = prompt(`Push price to Amazon for SKU: ${sku}\n\nEnter new price (ZAR):`, currentPrice || '');
+  if (priceStr === null) return; // cancelled
+  const price = parseFloat(priceStr);
+  if (isNaN(price) || price <= 0) { showAlert('alertBox', '⚠️ Invalid price entered.', 'error'); return; }
+
+  showAlert('alertBox', `<span class="loading"></span>Pushing R${price.toFixed(2)} to Amazon for SKU <b>${sku}</b>...`, 'info');
+
+  try {
+    const r = await fetch(API + '/api/amazon/push-price', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({sku, price, asin})
+    });
+    const d = await r.json();
+    if (r.ok && d.ok) {
+      showAlert('alertBox', `✅ Price pushed! SKU <b>${sku}</b> → <b>R${price.toFixed(2)}</b> on Amazon. Changes may take a few minutes to reflect.`, 'success');
+      // Update local state
+      const prod = allProducts.find(p => p.asin === asin);
+      if (prod) { prod.my_price = price; renderTable(); }
+    } else {
+      showAlert('alertBox', `❌ Push failed: ${d.detail || d.message || 'Unknown error'}`, 'error');
+    }
+  } catch(e) {
+    showAlert('alertBox', `❌ Error pushing price: ${e.message}`, 'error');
+  }
 }
 
 async function removeASIN(asin) {

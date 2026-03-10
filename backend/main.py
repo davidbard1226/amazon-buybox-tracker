@@ -1458,6 +1458,126 @@ def update_sku(req: SkuUpdateRequest, db: Session = Depends(get_db)):
     return {"ok": True, "asin": asin, "sku": product.sku}
 
 
+# ============================================================================
+# SP-API Endpoints — Price Push, Credential Check, Listings Sync
+# ============================================================================
+
+try:
+    from sp_api_client import push_price, fetch_my_listings, check_credentials, get_competitive_pricing
+    SP_API_AVAILABLE = True
+    logger.info("sp_api_client loaded successfully")
+except Exception as e:
+    SP_API_AVAILABLE = False
+    logger.warning(f"sp_api_client not available: {e}")
+
+
+class PushPriceRequest(BaseModel):
+    sku: str
+    price: float
+    asin: str = ""  # for logging/response only
+
+
+@app.post("/api/amazon/push-price")
+def api_push_price(req: PushPriceRequest, db: Session = Depends(get_db)):
+    """Push a new price to Amazon for a given SKU via SP-API."""
+    if not SP_API_AVAILABLE:
+        raise HTTPException(status_code=503, detail="SP-API client not available")
+    if not req.sku:
+        raise HTTPException(status_code=400, detail="SKU is required")
+    if not req.price or req.price <= 0:
+        raise HTTPException(status_code=400, detail="Price must be greater than 0")
+
+    result = push_price(sku=req.sku, new_price=req.price)
+
+    # Log the push attempt in DB as a price_history note
+    if result.get("ok") and req.asin:
+        try:
+            save_price_history(db, {
+                "asin": req.asin.strip().upper(),
+                "marketplace": "amazon.co.za",
+                "buybox_price": req.price,
+                "buybox_seller": "Bonolo Online (pushed)",
+                "buybox_status": "pushed",
+            })
+        except Exception:
+            pass
+
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("message", "Push failed"))
+
+    return result
+
+
+@app.get("/api/amazon/check-credentials")
+def api_check_credentials():
+    """Verify SP-API credentials are working."""
+    if not SP_API_AVAILABLE:
+        return {"ok": False, "message": "SP-API client module not loaded"}
+    return check_credentials()
+
+
+@app.get("/api/amazon/my-listings")
+def api_my_listings():
+    """Fetch all active listings from Amazon Seller Central."""
+    if not SP_API_AVAILABLE:
+        raise HTTPException(status_code=503, detail="SP-API client not available")
+    result = fetch_my_listings(limit=100)
+    if not result.get("ok"):
+        raise HTTPException(status_code=500, detail=result.get("message", "Fetch failed"))
+    return result
+
+
+@app.post("/api/amazon/sync-listings")
+def api_sync_listings(db: Session = Depends(get_db)):
+    """
+    Fetch listings from Amazon and sync prices/quantities into our DB.
+    Matches on SKU → updates my_price and my_stock for matched products.
+    """
+    if not SP_API_AVAILABLE:
+        raise HTTPException(status_code=503, detail="SP-API client not available")
+
+    result = fetch_my_listings(limit=200)
+    if not result.get("ok"):
+        raise HTTPException(status_code=500, detail=result.get("message", "Fetch failed"))
+
+    listings = result.get("listings", [])
+    updated = 0
+    not_found = []
+
+    for listing in listings:
+        sku = listing.get("sku", "")
+        amazon_price = listing.get("price")
+        amazon_qty = listing.get("quantity")
+
+        if not sku:
+            continue
+
+        product = db.query(TrackedASIN).filter(TrackedASIN.sku == sku).first()
+        if product:
+            if amazon_price is not None:
+                product.my_price = float(amazon_price)
+            if amazon_qty is not None:
+                product.my_stock = int(amazon_qty)
+            product.updated_at = datetime.utcnow()
+            updated += 1
+        else:
+            not_found.append(sku)
+
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"DB commit failed: {str(e)}")
+
+    logger.info(f"Listings sync: {updated} updated, {len(not_found)} SKUs not in DB")
+    return {
+        "ok": True,
+        "updated": updated,
+        "total_from_amazon": len(listings),
+        "skus_not_in_db": not_found,
+    }
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=8001, reload=True)
