@@ -588,13 +588,15 @@ def get_amazon_buybox(asin: str, marketplace: str = "amazon.co.za") -> dict:
 
 @app.on_event("startup")
 def startup_event():
-    try:
-        init_db()
-        logger.info("Database initialized on startup")
-        # Migrate existing tables: add new columns if they don't exist
-        _migrate_db()
-    except Exception as e:
-        logger.error(f"Startup DB init error (app will still start): {e}")
+    import threading
+    def _bg():
+        try:
+            init_db()
+            _migrate_db()
+            logger.info("Database initialized")
+        except Exception as e:
+            logger.error(f"DB init error: {e}")
+    threading.Thread(target=_bg, daemon=True).start()
     if SCHEDULER_AVAILABLE:
         try:
             start_scheduler()

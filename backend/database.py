@@ -37,14 +37,13 @@ connect_args = {"check_same_thread": False} if "sqlite" in DATABASE_URL else {}
 if "sqlite" in DATABASE_URL:
     engine = create_engine(DATABASE_URL, connect_args=connect_args)
 else:
+    from sqlalchemy.pool import NullPool
+    clean_url = DATABASE_URL.split("?")[0]
     engine = create_engine(
-        DATABASE_URL,
-        connect_args=connect_args,
-        pool_pre_ping=True,
-        pool_size=2,
-        max_overflow=3,
-        pool_timeout=30,
-        pool_recycle=300,
+        clean_url,
+        connect_args={"sslmode": "require", "connect_timeout": 10},
+        poolclass=NullPool,
+        pool_pre_ping=False,
     )
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
