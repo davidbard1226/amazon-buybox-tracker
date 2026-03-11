@@ -1411,6 +1411,82 @@ async def sync_costs_from_gsheet(db: Session = Depends(get_db)):
     }
 
 
+# ── My Price sync from Google Sheet ──────────────────────────────────────────
+# Tab name: "My Prices"  |  Columns: SKU (col 0), My Price (col 1)
+# Create a tab in your sheet with header row:  SKU | My Price
+# Then paste your SKUs + selling prices there. This endpoint reads it and
+# updates my_price in the DB for every matched SKU.
+
+GSHEET_MYPRICES_GID = os.getenv("GSHEET_MYPRICES_GID", "")  # set via Render env var
+
+@app.get("/api/costs/sync-myprices-gsheet")
+async def sync_myprices_from_gsheet(db: Session = Depends(get_db)):
+    """Read My Price column from the 'My Prices' Google Sheet tab and update matched SKUs."""
+    gid = GSHEET_MYPRICES_GID
+    if not gid:
+        raise HTTPException(status_code=400, detail="GSHEET_MYPRICES_GID env var not set. Add the tab gid to Render.")
+
+    url = f"https://docs.google.com/spreadsheets/d/{GSHEET_ID}/export?format=csv&gid={gid}"
+    try:
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+            resp = await client.get(url)
+            resp.raise_for_status()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Failed to fetch Google Sheet: {e}")
+
+    # Parse CSV — skip header row, expect: SKU | My Price
+    price_lookup: dict = {}
+    reader = csv.reader(io.StringIO(resp.text))
+    for i, row in enumerate(reader):
+        if i == 0:
+            continue  # skip header
+        if len(row) < 2:
+            continue
+        sku_raw = row[0].strip()
+        price_raw = row[1].strip()
+        if not sku_raw or not price_raw:
+            continue
+        try:
+            price_val = float(re.sub(r'[^\d.]', '', price_raw))
+        except Exception:
+            continue
+        if price_val > 0:
+            price_lookup[sku_raw.lower()] = {"my_price": price_val, "sku_original": sku_raw}
+
+    logger.info(f"My Prices GSheet: loaded {len(price_lookup)} SKU prices")
+
+    all_products = get_all_asins(db)
+    matched = updated = 0
+    not_found = []
+
+    for product in all_products:
+        sku = (product.sku or "").strip()
+        if not sku:
+            continue
+        entry = price_lookup.get(sku.lower())
+        if entry:
+            matched += 1
+            product.my_price = entry["my_price"]
+            product.updated_at = datetime.utcnow()
+            updated += 1
+        else:
+            not_found.append(sku)
+
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"DB commit failed: {str(e)}")
+
+    logger.info(f"My Prices sync: {updated} updated, {len(not_found)} not matched")
+    return {
+        "updated": updated,
+        "matched": matched,
+        "not_found_count": len(not_found),
+        "sheet_skus_loaded": len(price_lookup),
+    }
+
+
 class CostUpdateRequest(BaseModel):
     asin: str
     cost_price: float

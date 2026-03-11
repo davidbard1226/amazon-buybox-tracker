@@ -141,6 +141,7 @@ tr:hover td{background:rgba(255,255,255,0.02);}
         <button class="btn btn-sm" style="background:#334155;color:#e2e8f0;" id="refreshSelectedBtn" onclick="refreshSelected()" style="display:none;">🔄 Refresh Selected</button>
         <button class="btn btn-primary btn-sm" onclick="refreshAll()">🔄 Refresh All</button>
         <button class="btn btn-sm" style="background:#1e3a5f;color:#93c5fd;border:1px solid #2563eb;" onclick="syncGSheet()">📊 Sync Costs</button>
+        <button class="btn btn-sm" style="background:#064e3b;color:#6ee7b7;border:1px solid #10b981;" onclick="syncMyPricesGSheet()">💰 Sync My Prices</button>
       </div>
     </div>
     <div class="search-bar">
@@ -838,6 +839,28 @@ async function syncGSheet() {
   } finally {
     btn.disabled = false;
     btn.innerHTML = '📊 Sync Costs';
+  }
+}
+
+// ── Google Sheet My Price Sync ────────────────────────────────────
+async function syncMyPricesGSheet() {
+  const btn = event.target;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="loading"></span>Syncing...';
+  try {
+    const r = await fetch(API + '/api/costs/sync-myprices-gsheet');
+    const d = await r.json();
+    if (r.ok) {
+      showAlert('alertBox', `✅ My Prices sync complete — ${d.updated} products updated from Google Sheet. ${d.not_found_count ? `${d.not_found_count} SKUs not matched.` : 'All SKUs matched!'}`, 'success');
+      await loadDashboard();
+    } else {
+      showAlert('alertBox', `❌ Sync failed: ${d.detail || 'Unknown error'}`, 'error');
+    }
+  } catch(e) {
+    showAlert('alertBox', `❌ Sync error: ${e.message}`, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '💰 Sync My Prices';
   }
 }
 
