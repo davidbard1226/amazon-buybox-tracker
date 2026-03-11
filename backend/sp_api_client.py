@@ -12,17 +12,19 @@ from datetime import datetime
 # ── Credentials from environment ─────────────────────────────────
 LWA_CLIENT_ID     = os.getenv("LWA_CLIENT_ID", "")
 LWA_CLIENT_SECRET = os.getenv("LWA_CLIENT_SECRET", "")
+LWA_REFRESH_TOKEN = os.getenv("LWA_REFRESH_TOKEN", "")
 AWS_ACCESS_KEY    = os.getenv("AWS_ACCESS_KEY_ID", "")
 AWS_SECRET_KEY    = os.getenv("AWS_SECRET_ACCESS_KEY", "")
 SELLER_ID         = os.getenv("SP_API_SELLER_ID", "")
 MARKETPLACE_ID    = os.getenv("SP_API_MARKETPLACE_ID", "A1E5JOF6FQYU90")  # ZA default
 
 CREDENTIALS = {
-    "lwa_app_id":     LWA_CLIENT_ID,
+    "lwa_app_id":       LWA_CLIENT_ID,
     "lwa_client_secret": LWA_CLIENT_SECRET,
-    "aws_secret_key": AWS_SECRET_KEY,
-    "aws_access_key": AWS_ACCESS_KEY,
-    "role_arn":       None,  # Not using IAM role, using direct IAM user
+    "lwa_refresh_token": LWA_REFRESH_TOKEN,
+    "aws_secret_key":   AWS_SECRET_KEY,
+    "aws_access_key":   AWS_ACCESS_KEY,
+    "role_arn":         None,
 }
 
 def _creds_ok() -> bool:
@@ -30,6 +32,7 @@ def _creds_ok() -> bool:
     missing = [k for k, v in {
         "LWA_CLIENT_ID": LWA_CLIENT_ID,
         "LWA_CLIENT_SECRET": LWA_CLIENT_SECRET,
+        "LWA_REFRESH_TOKEN": LWA_REFRESH_TOKEN,
         "AWS_ACCESS_KEY_ID": AWS_ACCESS_KEY,
         "AWS_SECRET_ACCESS_KEY": AWS_SECRET_KEY,
         "SP_API_SELLER_ID": SELLER_ID,

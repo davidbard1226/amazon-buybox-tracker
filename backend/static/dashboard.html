@@ -187,8 +187,8 @@ tr:hover td{background:rgba(255,255,255,0.02);}
             <th style="cursor:default;white-space:nowrap;">Profit (My Price) ↕</th>
             <th style="cursor:default;white-space:nowrap;color:#f59e0b;">💡 Profit if Match BB</th>
             <th onclick="sortTable('my_stock')" style="cursor:pointer;">Stock ↕</th>
-            <th style="cursor:default;white-space:nowrap;color:#ef4444;">🔻 Min Price</th>
-            <th style="cursor:default;white-space:nowrap;color:#10b981;">🔺 Max Price</th>
+            <th style="cursor:default;white-space:nowrap;color:#ef4444;">🔻 Min Price (5%)</th>
+            <th style="cursor:default;white-space:nowrap;color:#10b981;">🔺 Max Price (20%)</th>
             <th onclick="sortTable('buybox_price')" style="cursor:pointer;">Buybox Price ↕</th>
             <th onclick="sortTable('buybox_seller')" style="cursor:pointer;">Buybox Seller ↕</th>
             <th>Status</th>
@@ -719,7 +719,7 @@ function renderTable() {
         </div>`;
       })()}</td>
       <td style="text-align:center;">${stockHtml}</td>
-      <td>${cost ? `<div style="font-weight:700;color:#ef4444;">${cur}${(cost/(1-0.06-0.02)).toLocaleString('en-ZA',{minimumFractionDigits:2})}</div><div style="font-size:0.7rem;color:#64748b;">floor 2%</div>` : '<span style="color:#334155;font-size:0.8rem;">—</span>'}</td>
+      <td>${cost ? `<div style="font-weight:700;color:#ef4444;">${cur}${(cost/(1-0.06-0.05)).toLocaleString('en-ZA',{minimumFractionDigits:2})}</div><div style="font-size:0.7rem;color:#64748b;">floor 5%</div>` : '<span style="color:#334155;font-size:0.8rem;">—</span>'}</td>
       <td>${cost ? `<div style="font-weight:700;color:#10b981;">${cur}${(cost/(1-0.06-0.20)).toLocaleString('en-ZA',{minimumFractionDigits:2})}</div><div style="font-size:0.7rem;color:#64748b;">target 20%</div>` : '<span style="color:#334155;font-size:0.8rem;">—</span>'}</td>
       <td>${fmtPrice(p.buybox_price, p.marketplace)}</td>
       <td>${fmtSeller(p.buybox_seller, p.buybox_status)}</td>
