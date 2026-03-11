@@ -52,32 +52,31 @@ def push_price(sku: str, new_price: float, currency: str = "ZAR") -> dict:
         return {"ok": False, "message": "Invalid price — must be greater than 0", "sku": sku, "price": new_price}
 
     try:
-        from sp_api.api import Listings
+        from sp_api.api import ListingsItems
         from sp_api.base import Marketplaces, SellingApiException
-        from sp_api.models import ListingsItemPatchRequest, PatchOperation
 
         marketplace = Marketplaces.ZA  # Amazon.co.za
 
-        listings = Listings(
+        listings = ListingsItems(
             credentials=CREDENTIALS,
             marketplace=marketplace,
         )
 
         # Build the patch request — update standardPrice attribute
-        patch = ListingsItemPatchRequest(
-            productType="PRODUCT",
-            patches=[
-                PatchOperation(
-                    op="replace",
-                    path="/attributes/purchasable_offer",
-                    value=[{
+        patch = {
+            "productType": "PRODUCT",
+            "patches": [
+                {
+                    "op": "replace",
+                    "path": "/attributes/purchasable_offer",
+                    "value": [{
                         "marketplace_id": MARKETPLACE_ID,
                         "currency": currency,
                         "our_price": [{"schedule": [{"value_with_tax": new_price}]}]
                     }]
-                )
+                }
             ]
-        )
+        }
 
         logger.info(f"SP-API: Pushing price R{new_price} for SKU={sku}")
         response = listings.patch_listings_item(
@@ -113,11 +112,11 @@ def fetch_my_listings(limit: int = 50) -> dict:
         return {"ok": False, "message": "SP-API credentials not configured", "listings": []}
 
     try:
-        from sp_api.api import Listings, CatalogItems
+        from sp_api.api import ListingsItems, CatalogItems
         from sp_api.base import Marketplaces
 
         marketplace = Marketplaces.ZA
-        listings_api = Listings(credentials=CREDENTIALS, marketplace=marketplace)
+        listings_api = ListingsItems(credentials=CREDENTIALS, marketplace=marketplace)
 
         logger.info(f"SP-API: Fetching listings for seller {SELLER_ID}")
         response = listings_api.get_listings_items(

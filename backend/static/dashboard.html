@@ -159,6 +159,24 @@ tr:hover td{background:rgba(255,255,255,0.02);}
       <span id="searchCount" style="font-size:0.8rem;color:#f97316;font-weight:600;margin-left:auto;"></span>
     </div>
     <div id="alertBox"></div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
+      <div style="display:flex;align-items:center;gap:8px;font-size:0.875rem;color:#94a3b8;">
+        Show:
+        <select id="pageSizeSelect" onchange="changePageSize(this.value)" style="background:#0f172a;border:1px solid #334155;color:#e2e8f0;padding:5px 10px;border-radius:6px;font-size:0.875rem;outline:none;">
+          <option value="25" selected>25</option>
+          <option value="50">50</option>
+          <option value="100">100</option>
+          <option value="all">All</option>
+        </select>
+        per page
+      </div>
+      <div id="paginationInfo" style="font-size:0.875rem;color:#94a3b8;"></div>
+      <div style="display:flex;gap:6px;" id="paginationBtns">
+        <button onclick="goPage(-1)" id="prevBtn" class="btn btn-sm" style="background:#334155;color:#e2e8f0;padding:6px 14px;">◀ Prev</button>
+        <span id="pageNumBtns" style="display:flex;gap:4px;"></span>
+        <button onclick="goPage(1)" id="nextBtn" class="btn btn-sm" style="background:#334155;color:#e2e8f0;padding:6px 14px;">Next ▶</button>
+      </div>
+    </div>
     <div class="table-wrap">
       <table id="productsTable">
         <thead>
@@ -174,6 +192,8 @@ tr:hover td{background:rgba(255,255,255,0.02);}
             <th style="cursor:default;white-space:nowrap;">Profit (My Price) ↕</th>
             <th style="cursor:default;white-space:nowrap;color:#f59e0b;">💡 Profit if Match BB</th>
             <th onclick="sortTable('my_stock')" style="cursor:pointer;">Stock ↕</th>
+            <th style="cursor:default;white-space:nowrap;color:#ef4444;">🔻 Min Price <span style="font-weight:400;font-size:0.75rem;">(2% margin)</span></th>
+            <th style="cursor:default;white-space:nowrap;color:#10b981;">🔺 Max Price <span style="font-weight:400;font-size:0.75rem;">(20% margin)</span></th>
             <th onclick="sortTable('buybox_price')" style="cursor:pointer;">Buybox Price ↕</th>
             <th onclick="sortTable('buybox_seller')" style="cursor:pointer;">Buybox Seller ↕</th>
             <th>Status</th>
@@ -455,6 +475,8 @@ let currentFilter = 'all';
 let sortCol = 'scraped_at';
 let sortDir = -1;
 let selectedAsins = new Set();
+let pageSize = 25;   // rows per page
+let currentPage = 1; // 1-based
 
 // ── Page Navigation ──────────────────────────────────────────────
 function showPage(name) {
@@ -600,7 +622,7 @@ function renderTable() {
 
   const tbody = document.getElementById('productsBody');
   if (!data.length) {
-    tbody.innerHTML = `<tr><td colspan="16"><div class="empty-state"><div class="icon">🔍</div><p>No products match your search/filter.</p></div></td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="18"><div class="empty-state"><div class="icon">🔍</div><p>No products match your search/filter.</p></div></td></tr>`;
     return;
   }
 
@@ -681,6 +703,18 @@ function renderTable() {
         </div>`;
       })()}</td>
       <td style="text-align:center;">${stockHtml}</td>
+      <td>${(() => {
+        // Min Price = cost / (1 - 0.06 - 0.02) i.e. price that gives exactly 2% margin after 6% fee
+        if (!cost) return '<span style="color:#334155;font-size:0.8rem;">—</span>';
+        const minP = cost / (1 - 0.06 - 0.02); // cost / 0.92
+        return `<div style="font-weight:700;color:#ef4444;">${cur}${minP.toLocaleString('en-ZA',{minimumFractionDigits:2})}</div><div style="font-size:0.7rem;color:#64748b;">floor: 2% margin</div>`;
+      })()}</td>
+      <td>${(() => {
+        // Max Price = cost / (1 - 0.06 - 0.20) i.e. price that gives 20% margin after 6% fee
+        if (!cost) return '<span style="color:#334155;font-size:0.8rem;">—</span>';
+        const maxP = cost / (1 - 0.06 - 0.20); // cost / 0.74
+        return `<div style="font-weight:700;color:#10b981;">${cur}${maxP.toLocaleString('en-ZA',{minimumFractionDigits:2})}</div><div style="font-size:0.7rem;color:#64748b;">target: 20% margin</div>`;
+      })()}</td>
       <td>${fmtPrice(p.buybox_price, p.marketplace)}</td>
       <td>${fmtSeller(p.buybox_seller, p.buybox_status)}</td>
       <td>${fmtStatus(p.buybox_status)}</td>
@@ -696,11 +730,52 @@ function renderTable() {
     </tr>`;
   }).join('');
 
-  // Sync select-all checkbox
-  const allChk = document.getElementById('selectAll');
-  if (allChk) allChk.checked = data.length > 0 && data.every(p => selectedAsins.has(p.asin));
-  updateSelectedBadge();
-}
+  // ── Pagination ────────────────────────────────────────────────
+  const total = data.length;
+  const effectivePageSize = pageSize === 'all' ? total : parseInt(pageSize);
+  const totalPages = effectivePageSize > 0 ? Math.ceil(total / effectivePageSize) : 1;
+  if (currentPage > totalPages) currentPage = totalPages || 1;
+  const startIdx = (currentPage - 1) * effectivePageSize;
+  const pageData = pageSize === 'all' ? data : data.slice(startIdx, startIdx + effectivePageSize);
+
+  // Update pagination info
+  const infoEl = document.getElementById('paginationInfo');
+  if (infoEl) {
+    if (pageSize === 'all') {
+      infoEl.textContent = `Showing all ${total} products`;
+    } else {
+      const from = total === 0 ? 0 : startIdx + 1;
+      const to = Math.min(startIdx + effectivePageSize, total);
+      infoEl.textContent = `Showing ${from}–${to} of ${total}`;
+    }
+  }
+
+  // Page number buttons (show up to 7 page buttons)
+  const pageNumEl = document.getElementById('pageNumBtns');
+  if (pageNumEl) {
+    const maxBtns = 7;
+    let startP = Math.max(1, currentPage - 3);
+    let endP = Math.min(totalPages, startP + maxBtns - 1);
+    if (endP - startP < maxBtns - 1) startP = Math.max(1, endP - maxBtns + 1);
+    let html = '';
+    for (let i = startP; i <= endP; i++) {
+      html += `<button onclick="jumpPage(${i})" class="btn btn-sm" style="background:${i===currentPage?'#f97316':'#334155'};color:#fff;padding:6px 12px;min-width:34px;">${i}</button>`;
+    }
+    pageNumEl.innerHTML = html;
+  }
+
+  // Prev/Next button states
+  const prevBtn = document.getElementById('prevBtn');
+  const nextBtn = document.getElementById('nextBtn');
+  if (prevBtn) prevBtn.disabled = currentPage <= 1;
+  if (nextBtn) nextBtn.disabled = currentPage >= totalPages || pageSize === 'all';
+
+  // Show/hide pagination controls
+  const paginBtns = document.getElementById('paginationBtns');
+  if (paginBtns) paginBtns.style.display = pageSize === 'all' ? 'none' : 'flex';
+
+  // Render only the current page slice
+  tbody.innerHTML = pageData.map(p => {
 
 // ── Checkbox selection ────────────────────────────────────────────
 function toggleSelect(chk) {
