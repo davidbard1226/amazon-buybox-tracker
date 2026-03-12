@@ -143,7 +143,7 @@ tr:hover td{background:rgba(255,255,255,0.02);}
         <button class="btn btn-sm" style="background:#1e3a5f;color:#93c5fd;border:1px solid #2563eb;" onclick="syncGSheet()">📊 Sync Costs</button>
         <button class="btn btn-sm" style="background:#064e3b;color:#6ee7b7;border:1px solid #10b981;" onclick="syncMyPricesGSheet()">💰 Sync My Prices</button>
         <button class="btn btn-sm" style="background:#1e1a4a;color:#c4b5fd;border:1px solid #7c3aed;" onclick="downloadPriceFile('all')" title="Download flat file for all products — upload to Seller Central">📥 Download All Prices</button>
-        <button class="btn btn-sm" style="background:#2d1a00;color:#fcd34d;border:1px solid #d97706;" onclick="downloadPriceFile('reprice')" title="Auto-reprice: beat buybox by R1, never below floor — download & upload to Seller Central">🤖 Auto-Reprice File</button>
+        <button class="btn btn-sm" style="background:#2d1a00;color:#fcd34d;border:1px solid #d97706;" onclick="openRepriceModal()" title="Select products to reprice, review new prices, then download">🤖 Repricer</button>
       </div>
     </div>
     <div class="search-bar">
@@ -459,6 +459,69 @@ tr:hover td{background:rgba(255,255,255,0.02);}
 </div>
 
 </div><!-- end main -->
+<!-- ── REPRICE MODAL ─────────────────────────────────────────── -->
+<div id="repriceModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:1000;overflow-y:auto;">
+  <div style="background:#1e293b;border:1px solid #334155;border-radius:16px;max-width:1100px;margin:40px auto;padding:32px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+      <div>
+        <h2 style="color:#f1f5f9;font-size:1.3rem;">🤖 Smart Repricer</h2>
+        <p style="color:#94a3b8;font-size:0.9rem;margin-top:4px;">Review proposed prices before downloading. Edit any price manually. Then download & upload to Seller Central.</p>
+      </div>
+      <button onclick="closeRepriceModal()" style="background:#334155;border:none;color:#e2e8f0;width:36px;height:36px;border-radius:8px;font-size:1.2rem;cursor:pointer;">✕</button>
+    </div>
+
+    <!-- Strategy selector -->
+    <div style="display:flex;gap:12px;margin-bottom:20px;flex-wrap:wrap;">
+      <div style="font-size:0.9rem;color:#94a3b8;align-self:center;">Strategy:</div>
+      <button onclick="setRepriceStrategy('beat',this)" class="repriceStratBtn active" style="padding:8px 16px;border-radius:8px;font-size:0.875rem;font-weight:600;border:2px solid #f97316;background:rgba(249,115,22,0.15);color:#f97316;cursor:pointer;">🥊 Beat Buybox by R1</button>
+      <button onclick="setRepriceStrategy('match',this)" class="repriceStratBtn" style="padding:8px 16px;border-radius:8px;font-size:0.875rem;font-weight:600;border:2px solid #334155;background:transparent;color:#94a3b8;cursor:pointer;">🤝 Match Buybox</button>
+      <button onclick="setRepriceStrategy('max',this)" class="repriceStratBtn" style="padding:8px 16px;border-radius:8px;font-size:0.875rem;font-weight:600;border:2px solid #334155;background:transparent;color:#94a3b8;cursor:pointer;">💰 Max Price (20% margin)</button>
+      <div style="margin-left:auto;display:flex;gap:8px;align-items:center;">
+        <label style="font-size:0.85rem;color:#94a3b8;">Filter:</label>
+        <select id="repriceFilterSelect" onchange="renderRepriceTable()" style="background:#0f172a;border:1px solid #334155;color:#e2e8f0;padding:6px 10px;border-radius:6px;font-size:0.85rem;">
+          <option value="all">All products with SKU</option>
+          <option value="losing">😞 Losing only</option>
+          <option value="winning">🏆 Winning only</option>
+          <option value="amazon">🛒 Amazon wins</option>
+        </select>
+      </div>
+    </div>
+
+    <div id="repriceAlert" style="margin-bottom:12px;"></div>
+
+    <!-- Summary bar -->
+    <div style="display:flex;gap:16px;margin-bottom:16px;flex-wrap:wrap;" id="repriceSummary"></div>
+
+    <!-- Table -->
+    <div style="overflow-x:auto;max-height:420px;overflow-y:auto;border:1px solid #334155;border-radius:8px;">
+      <table style="width:100%;border-collapse:collapse;font-size:0.875rem;">
+        <thead>
+          <tr style="background:#0f172a;position:sticky;top:0;z-index:2;">
+            <th style="padding:10px 12px;text-align:left;color:#94a3b8;white-space:nowrap;"><input type="checkbox" id="repriceSelectAll" onchange="toggleRepriceAll(this)" style="width:15px;height:15px;cursor:pointer;"/></th>
+            <th style="padding:10px 12px;text-align:left;color:#94a3b8;">Product</th>
+            <th style="padding:10px 12px;text-align:left;color:#94a3b8;">SKU</th>
+            <th style="padding:10px 12px;text-align:right;color:#94a3b8;">Buybox</th>
+            <th style="padding:10px 12px;text-align:right;color:#94a3b8;">My Price</th>
+            <th style="padding:10px 12px;text-align:right;color:#94a3b8;">Floor</th>
+            <th style="padding:10px 12px;text-align:right;color:#ef4444;">🔴 Status</th>
+            <th style="padding:10px 12px;text-align:right;color:#10b981;">✅ New Price</th>
+            <th style="padding:10px 12px;text-align:right;color:#a78bfa;">Profit</th>
+            <th style="padding:10px 12px;text-align:center;color:#94a3b8;">Note</th>
+          </tr>
+        </thead>
+        <tbody id="repriceTableBody"></tbody>
+      </table>
+    </div>
+
+    <!-- Action buttons -->
+    <div style="display:flex;gap:12px;margin-top:20px;flex-wrap:wrap;align-items:center;">
+      <button onclick="downloadRepriceSelection()" class="btn btn-primary" style="font-size:1rem;">📥 Download Price File for Selected</button>
+      <button onclick="closeRepriceModal()" class="btn" style="background:#334155;color:#e2e8f0;">Cancel</button>
+      <span style="font-size:0.8rem;color:#64748b;margin-left:auto;">After downloading: Seller Central → Inventory → Upload products & inventory → Price & Quantity</span>
+    </div>
+  </div>
+</div>
+
 </body>
 <script>
 // Auto-detect API URL: use same host when deployed, fallback to localhost for local dev
@@ -997,7 +1060,180 @@ async function refreshAll() {
   openBatch();
 }
 
-// ── Flat File Price Download (no SP-API needed) ──────────────────
+// ── Reprice Modal ─────────────────────────────────────────────────
+let repriceStrategy = 'beat';
+let repriceRows = []; // computed rows
+let repriceSelected = new Set();
+
+function openRepriceModal() {
+  document.getElementById('repriceModal').style.display = 'block';
+  renderRepriceTable();
+}
+function closeRepriceModal() {
+  document.getElementById('repriceModal').style.display = 'none';
+}
+
+function setRepriceStrategy(s, btn) {
+  repriceStrategy = s;
+  document.querySelectorAll('.repriceStratBtn').forEach(b => {
+    b.style.borderColor = '#334155'; b.style.background = 'transparent'; b.style.color = '#94a3b8';
+  });
+  btn.style.borderColor = '#f97316'; btn.style.background = 'rgba(249,115,22,0.15)'; btn.style.color = '#f97316';
+  renderRepriceTable();
+}
+
+function calcNewPrice(p) {
+  const AMZN_FEE = 0.06;
+  const cost = p.cost_price ? Number(p.cost_price) : null;
+  const floor = cost ? cost / (1 - AMZN_FEE - 0.05) : null;
+  const bb = p.buybox_price ? Number(p.buybox_price) : null;
+  const myP = p.my_price ? Number(p.my_price) : null;
+  let newPrice = myP;
+  let note = '';
+
+  if (repriceStrategy === 'beat') {
+    if (bb && p.buybox_status === 'losing') {
+      newPrice = Math.round((bb - 1) * 100) / 100;
+      note = `Beat BB by R1`;
+    } else if (p.buybox_status === 'winning') {
+      note = '🏆 Already winning';
+    } else {
+      note = 'No buybox data';
+    }
+  } else if (repriceStrategy === 'match') {
+    if (bb) { newPrice = bb; note = 'Match BB'; }
+    else note = 'No BB price';
+  } else if (repriceStrategy === 'max') {
+    if (cost) { newPrice = Math.round((cost / (1 - AMZN_FEE - 0.20)) * 100) / 100; note = '20% margin target'; }
+    else note = 'No cost data';
+  }
+
+  // Floor check
+  if (floor && newPrice && newPrice < floor) {
+    newPrice = Math.round(floor * 100) / 100;
+    note += ' ⚠️ Floor hit';
+  }
+
+  const profit = (cost && newPrice) ? (newPrice * (1 - AMZN_FEE) - cost) : null;
+  return { newPrice, note, floor, profit };
+}
+
+function renderRepriceTable() {
+  const filterVal = document.getElementById('repriceFilterSelect').value;
+  const AMZN_FEE = 0.06;
+
+  let products = allProducts.filter(p => p.sku && p.my_price);
+  if (filterVal !== 'all') products = products.filter(p => p.buybox_status === filterVal);
+
+  repriceRows = products.map(p => {
+    const { newPrice, note, floor, profit } = calcNewPrice(p);
+    return { ...p, newPrice, repriceNote: note, floor, repricedProfit: profit };
+  });
+
+  // Auto-select all
+  repriceSelected = new Set(repriceRows.map(r => r.asin));
+
+  // Summary
+  const changed = repriceRows.filter(r => r.newPrice && Math.abs(r.newPrice - (r.my_price||0)) > 0.01);
+  const sumEl = document.getElementById('repriceSummary');
+  sumEl.innerHTML = `
+    <div style="background:#0f172a;border:1px solid #334155;border-radius:8px;padding:10px 16px;font-size:0.85rem;">
+      <span style="color:#94a3b8;">Products: </span><span style="color:#f97316;font-weight:700;">${repriceRows.length}</span>
+    </div>
+    <div style="background:#0f172a;border:1px solid #334155;border-radius:8px;padding:10px 16px;font-size:0.85rem;">
+      <span style="color:#94a3b8;">Price changes: </span><span style="color:#10b981;font-weight:700;">${changed.length}</span>
+    </div>
+    <div style="background:#0f172a;border:1px solid #334155;border-radius:8px;padding:10px 16px;font-size:0.85rem;">
+      <span style="color:#94a3b8;">Selected: </span><span style="color:#c4b5fd;font-weight:700;" id="repriceSelectedCount">${repriceSelected.size}</span>
+    </div>`;
+
+  if (!repriceRows.length) {
+    document.getElementById('repriceTableBody').innerHTML = `<tr><td colspan="10" style="text-align:center;padding:30px;color:#475569;">No products match this filter (need SKU + My Price set)</td></tr>`;
+    return;
+  }
+
+  document.getElementById('repriceTableBody').innerHTML = repriceRows.map(r => {
+    const cur = 'R';
+    const priceChanged = r.newPrice && Math.abs(r.newPrice - (r.my_price||0)) > 0.01;
+    const rowBg = priceChanged ? 'rgba(16,185,129,0.04)' : '';
+    const isFloorHit = r.repriceNote && r.repriceNote.includes('Floor hit');
+    const chk = repriceSelected.has(r.asin);
+    return `<tr style="border-bottom:1px solid #1e293b;background:${rowBg}">
+      <td style="padding:10px 12px;"><input type="checkbox" data-asin="${r.asin}" onchange="toggleRepriceRow(this)" ${chk?'checked':''} style="width:15px;height:15px;cursor:pointer;"/></td>
+      <td style="padding:10px 12px;max-width:180px;"><div style="font-size:0.8rem;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${r.title||r.asin}</div></td>
+      <td style="padding:10px 12px;font-family:monospace;font-size:0.78rem;color:#94a3b8;">${r.sku}</td>
+      <td style="padding:10px 12px;text-align:right;font-weight:600;color:#a78bfa;">${r.buybox_price ? cur+Number(r.buybox_price).toFixed(2) : '—'}</td>
+      <td style="padding:10px 12px;text-align:right;color:#94a3b8;">${r.my_price ? cur+Number(r.my_price).toFixed(2) : '—'}</td>
+      <td style="padding:10px 12px;text-align:right;color:#ef4444;font-size:0.78rem;">${r.floor ? cur+r.floor.toFixed(2) : '—'}</td>
+      <td style="padding:10px 12px;text-align:right;">${r.buybox_status==='winning'?'🏆':'r.buybox_status==='losing'?'😞':'🛒'} ${r.buybox_status||'?'}</td>
+      <td style="padding:10px 12px;text-align:right;">
+        <input type="number" step="0.01" min="0" value="${r.newPrice ? r.newPrice.toFixed(2) : ''}"
+          data-asin="${r.asin}"
+          onchange="updateRepricePrice(this)"
+          style="width:90px;padding:4px 8px;text-align:right;font-weight:700;color:${isFloorHit?'#f59e0b':'#10b981'};background:#0f172a;border:1px solid ${priceChanged?'#10b981':'#334155'};border-radius:5px;font-size:0.875rem;"/>
+      </td>
+      <td style="padding:10px 12px;text-align:right;font-size:0.8rem;color:${r.repricedProfit>=0?'#10b981':'#ef4444'};">${r.repricedProfit!==null ? (r.repricedProfit>=0?'+':'')+cur+Math.abs(r.repricedProfit).toFixed(2) : '—'}</td>
+      <td style="padding:10px 12px;font-size:0.75rem;color:${isFloorHit?'#f59e0b':'#64748b'};white-space:nowrap;">${r.repriceNote||''}</td>
+    </tr>`;
+  }).join('');
+}
+
+function toggleRepriceAll(chk) {
+  repriceRows.forEach(r => { if (chk.checked) repriceSelected.add(r.asin); else repriceSelected.delete(r.asin); });
+  document.querySelectorAll('#repriceTableBody input[type=checkbox]').forEach(b => b.checked = chk.checked);
+  document.getElementById('repriceSelectedCount').textContent = repriceSelected.size;
+}
+
+function toggleRepriceRow(chk) {
+  const asin = chk.dataset.asin;
+  if (chk.checked) repriceSelected.add(asin); else repriceSelected.delete(asin);
+  document.getElementById('repriceSelectedCount').textContent = repriceSelected.size;
+}
+
+function updateRepricePrice(inp) {
+  const asin = inp.dataset.asin;
+  const row = repriceRows.find(r => r.asin === asin);
+  if (!row) return;
+  const val = parseFloat(inp.value);
+  if (!isNaN(val) && val > 0) {
+    row.newPrice = val;
+    const cost = row.cost_price ? Number(row.cost_price) : null;
+    row.repricedProfit = cost ? (val * 0.94 - cost) : null;
+  }
+}
+
+function downloadRepriceSelection() {
+  const selected = repriceRows.filter(r => repriceSelected.has(r.asin) && r.newPrice && r.newPrice > 0);
+  if (!selected.length) {
+    document.getElementById('repriceAlert').innerHTML = `<div class="alert alert-error">No products selected or no valid prices.</div>`;
+    return;
+  }
+  // Build flat file content in the browser directly
+  const lines = [
+    'TemplateType=PriceInventory\tVersion=2014.0301',
+    ['sku','price','minimum-seller-allowed-price','maximum-seller-allowed-price','quantity','leadtime-to-ship','fulfillment-channel'].join('\t'),
+    ['sku','price','minimum-seller-allowed-price','maximum-seller-allowed-price','quantity','leadtime-to-ship','fulfillment-channel'].join('\t'),
+  ];
+  selected.forEach(r => {
+    lines.push([r.sku, r.newPrice.toFixed(2), '', '', '', '', 'DEFAULT'].join('\t'));
+  });
+  const content = lines.join('\n');
+  const blob = new Blob([content], {type: 'text/plain'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `amazon_reprice_${selected.length}products_${new Date().toISOString().slice(0,10)}.txt`;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+
+  document.getElementById('repriceAlert').innerHTML = `<div class="alert alert-success">
+    ✅ Downloaded price file for <b>${selected.length} product(s)</b>.<br>
+    <b>Next:</b> Go to <a href="https://sellercentral.amazon.co.za/listing/upload" target="_blank" style="color:#f97316;">Seller Central → Inventory → Upload products & inventory</a>,
+    choose <b>Price & Quantity</b>, upload the file. Prices update within ~15 minutes.
+  </div>`;
+}
+
+
 function downloadPriceFile(type) {
   // type = 'all' or 'reprice'
   const url = API + '/api/amazon/price-file/' + type;
