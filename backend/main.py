@@ -1654,6 +1654,144 @@ def api_sync_listings(db: Session = Depends(get_db)):
     }
 
 
+
+# ============================================================================
+# Flat File Price Update — No SP-API needed, upload to Seller Central manually
+# ============================================================================
+
+from fastapi.responses import StreamingResponse
+import io as _io
+
+def _build_price_flat_file(products: list) -> str:
+    """
+    Build Amazon Price & Quantity flat file (tab-separated).
+    Template type: Price & Quantity Update
+    Works on Amazon.co.za (and all Amazon marketplaces).
+    Upload at: Seller Central → Inventory → Upload products & inventory
+    """
+    lines = []
+    # Row 1: Template type header (required by Amazon)
+    lines.append("TemplateType=PriceInventory\tVersion=2014.0301")
+    # Row 2: Column headers
+    lines.append("\t".join([
+        "sku", "price", "minimum-seller-allowed-price", "maximum-seller-allowed-price",
+        "quantity", "leadtime-to-ship", "fulfillment-channel"
+    ]))
+    # Row 3: Data type hints (required filler row)
+    lines.append("\t".join([
+        "sku", "price", "minimum-seller-allowed-price", "maximum-seller-allowed-price",
+        "quantity", "leadtime-to-ship", "fulfillment-channel"
+    ]))
+
+    for p in products:
+        sku = (p.get("sku") or "").strip()
+        price = p.get("price")
+        if not sku or not price or float(price) <= 0:
+            continue
+        lines.append("\t".join([
+            sku,
+            f"{float(price):.2f}",
+            "",   # min price — leave blank
+            "",   # max price — leave blank
+            "",   # quantity — leave blank (price-only update)
+            "",   # leadtime
+            "DEFAULT",  # merchant fulfilled
+        ]))
+
+    return "\n".join(lines)
+
+
+@app.get("/api/amazon/price-file/all")
+def download_price_file_all(db: Session = Depends(get_db)):
+    """
+    Generate a flat file for ALL products that have a SKU + my_price set.
+    Download and upload to Seller Central → Inventory → Upload products & inventory.
+    """
+    products = db.query(TrackedASIN).filter(
+        TrackedASIN.sku != None,
+        TrackedASIN.sku != "",
+        TrackedASIN.my_price != None,
+        TrackedASIN.my_price > 0,
+    ).all()
+
+    if not products:
+        raise HTTPException(status_code=404, detail="No products with SKU + price found")
+
+    rows = [{"sku": p.sku, "price": p.my_price} for p in products]
+    content = _build_price_flat_file(rows)
+    filename = f"amazon_price_update_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+
+    return StreamingResponse(
+        _io.BytesIO(content.encode("utf-8")),
+        media_type="text/plain",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
+
+
+@app.get("/api/amazon/price-file/reprice")
+def download_reprice_file(db: Session = Depends(get_db)):
+    """
+    Generate a flat file using AUTO-REPRICE logic:
+    - If we're losing the buybox: set price = buybox_price - R1 (never below min_price floor)
+    - If we're winning: keep my_price
+    - If buybox unknown: keep my_price
+    Only includes products with a SKU.
+    """
+    products = db.query(TrackedASIN).filter(
+        TrackedASIN.sku != None,
+        TrackedASIN.sku != "",
+    ).all()
+
+    if not products:
+        raise HTTPException(status_code=404, detail="No products with SKU found")
+
+    rows = []
+    skipped = []
+
+    for p in products:
+        if not p.my_price or p.my_price <= 0:
+            skipped.append({"sku": p.sku, "reason": "no my_price set"})
+            continue
+
+        # Calculate floor price (5% margin after 6% Amazon fee)
+        cost = p.cost_price or 0
+        floor_price = (cost / 0.89) if cost > 0 else (p.my_price * 0.90)
+
+        buybox = p.buybox_price or 0
+        status = p.buybox_status or "unknown"
+
+        if status == "losing" and buybox > 0:
+            new_price = round(buybox - 1, 2)  # Beat buybox by R1
+            if new_price < floor_price:
+                new_price = round(floor_price, 2)  # Never go below floor
+                skipped.append({"sku": p.sku, "reason": f"floor hit: buybox R{buybox:.2f}, floor R{floor_price:.2f}"})
+        else:
+            new_price = round(p.my_price, 2)  # Keep current price
+
+        rows.append({"sku": p.sku, "price": new_price})
+
+    content = _build_price_flat_file(rows)
+    filename = f"amazon_reprice_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+
+    return StreamingResponse(
+        _io.BytesIO(content.encode("utf-8")),
+        media_type="text/plain",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
+@app.get("/api/amazon/price-file/single/{sku}")
+def download_price_file_single(sku: str, price: float, db: Session = Depends(get_db)):
+    """Generate a flat file for a single SKU at a given price."""
+    content = _build_price_flat_file([{"sku": sku, "price": price}])
+    filename = f"amazon_price_{sku}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+    return StreamingResponse(
+        _io.BytesIO(content.encode("utf-8")),
+        media_type="text/plain",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=8001, reload=True)
