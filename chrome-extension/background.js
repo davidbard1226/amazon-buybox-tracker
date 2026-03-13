@@ -3,9 +3,20 @@
 
 console.log('🔧 Amazon Buybox Tracker Background Service Started v1.2.0');
 
-// ─── Message Router ───────────────────────────────────────────────────────────
+// ─── Message Router (internal + external from dashboard) ─────────────────────
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   console.log('📨 Background received:', request.action);
+  handleMessage(request, sender, sendResponse);
+  return true;
+});
+
+chrome.runtime.onMessageExternal.addListener((request, sender, sendResponse) => {
+  console.log('📨 External message from dashboard:', request.action);
+  handleMessage(request, sender, sendResponse);
+  return true;
+});
+
+function handleMessage(request, sender, sendResponse) {
 
   // Close the tab that sent this message (window.close() is blocked cross-origin)
   if (request.action === 'closeTab') {
@@ -65,7 +76,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       .catch(error => sendResponse({ success: false, error: error.message }));
     return true;
   }
-});
+}
 
 // ─── Get cleaned backend URL ─────────────────────────────────────────────────
 async function getBackendUrl() {
