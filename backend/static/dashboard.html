@@ -429,22 +429,6 @@ tr[id^="qr-"] td input{pointer-events:auto;position:relative;z-index:20;}
   </div>
 
   <div class="card">
-    <h2>🔌 Chrome Extension</h2>
-    <p style="color:#94a3b8;margin-bottom:18px;font-size:1rem;">Enter your Extension ID so the dashboard can send prices directly to the extension for auto-upload to Seller Central.</p>
-    <div style="background:#1a2e44;border:1px solid #2563eb;border-radius:8px;padding:14px;margin-bottom:18px;font-size:0.9rem;color:#93c5fd;">
-      Find your Extension ID: open <b>chrome://extensions</b> → find <b>Amazon Buybox Tracker</b> → copy the ID shown below the name.
-    </div>
-    <div class="form-row" style="margin-bottom:16px;">
-      <div class="form-group" style="flex:1;">
-        <label>Extension ID</label>
-        <input type="text" id="extIdInput" placeholder="e.g. abcdefghijklmnopabcdefghijklmnop" style="font-family:monospace;"/>
-      </div>
-    </div>
-    <button class="btn btn-primary" onclick="saveExtId()">💾 Save Extension ID</button>
-    <div id="extIdMsg" style="margin-top:12px;"></div>
-  </div>
-
-  <div class="card">
     <h2>🔄 Auto-Refresh Scheduler</h2>
     <p style="color:#94a3b8;margin-bottom:18px;font-size:1rem;">Automatically refresh buybox data for all tracked ASINs on a schedule.</p>
     <div id="schedulerStatus" style="background:#0f172a;border-radius:8px;padding:16px;margin-bottom:18px;font-size:1rem;color:#94a3b8;">Loading scheduler status...</div>
@@ -1263,38 +1247,19 @@ function downloadRepriceSelection() {
   selected.forEach(r => {
     lines.push([r.sku, Math.round(r.newPrice).toFixed(2), '', '', '', '', 'DEFAULT'].join('\t'));
   });
-  const fileName = `amazon_reprice_${selected.length}products_${new Date().toISOString().slice(0,10)}.txt`;
   const content = lines.join('\n');
-
-  // Try extension auto-upload first
-  try {
-    if (window.chrome && chrome.runtime) {
-      chrome.runtime.sendMessage(
-        { action: 'autoUploadPriceFile', content, fileName, skuCount: selected.length },
-        (resp) => {
-          if (chrome.runtime.lastError || !resp || !resp.success) {
-            _downloadAndShowLink(content, fileName, selected.length);
-          } else {
-            document.getElementById('repriceAlert').innerHTML = `<div class="alert alert-success">🤖 Extension uploading <b>${selected.length} products</b> to Seller Central automatically...</div>`;
-          }
-        }
-      );
-      return;
-    }
-  } catch(e) {}
-  _downloadAndShowLink(content, fileName, selected.length);
-}
-
-function _downloadAndShowLink(content, fileName, count) {
   const blob = new Blob([content], {type: 'text/plain'});
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
-  a.href = url; a.download = fileName;
+  a.href = url;
+  a.download = `amazon_reprice_${selected.length}products_${new Date().toISOString().slice(0,10)}.txt`;
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
   URL.revokeObjectURL(url);
+
   document.getElementById('repriceAlert').innerHTML = `<div class="alert alert-success">
-    ✅ Downloaded price file for <b>${count} product(s)</b>.<br>
-    <b>Next:</b> Go to <a href="https://sellercentral.amazon.co.za/listing/upload" target="_blank" style="color:#f97316;">Seller Central → Upload</a> and submit the file.
+    ✅ Downloaded price file for <b>${selected.length} product(s)</b>.<br>
+    <b>Next:</b> Go to <a href="https://sellercentral.amazon.co.za/listing/upload" target="_blank" style="color:#f97316;">Seller Central → Inventory → Upload products & inventory</a>,
+    choose <b>Price & Quantity</b>, upload the file. Prices update within ~15 minutes.
   </div>`;
 }
 
@@ -1335,49 +1300,22 @@ function downloadQuickReprice(asin, sku) {
   if (!inp) return;
   const price = Math.round(parseFloat(inp.value));
   if (isNaN(price) || price <= 0) { alert('Enter a valid price first.'); return; }
-
   const lines = [
     'TemplateType=PriceInventory\tVersion=2014.0301',
     ['sku','price','minimum-seller-allowed-price','maximum-seller-allowed-price','quantity','leadtime-to-ship','fulfillment-channel'].join('\t'),
     ['sku','price','minimum-seller-allowed-price','maximum-seller-allowed-price','quantity','leadtime-to-ship','fulfillment-channel'].join('\t'),
     [sku, price.toFixed(2), '', '', '', '', 'DEFAULT'].join('\t'),
   ];
-  const content = lines.join('\n');
-  const fileName = `reprice_${sku}_R${price}_${new Date().toISOString().slice(0,10)}.txt`;
-
-  // Try extension auto-upload using stored extension ID
-  const extId = localStorage.getItem('buyboxExtId');
-  if (extId && window.chrome && chrome.runtime) {
-    try {
-      chrome.runtime.sendMessage(extId,
-        { action: 'autoUploadPriceFile', content, fileName, skuCount: 1 },
-        (resp) => {
-          if (chrome.runtime.lastError) {
-            showAlert('alertBox', `⚠️ Extension not found — check Extension ID in Settings. Downloading file instead...`, 'error');
-            _downloadFlatFile(content, fileName, asin, sku, price);
-          } else {
-            showAlert('alertBox', `🤖 Seller Central opening — price <b>R${price}</b> for <b>${sku}</b> being uploaded automatically...`, 'success');
-            toggleQuickReprice(asin);
-          }
-        }
-      );
-      return;
-    } catch(e) {}
-  }
-
-  // No extension ID set — just download
-  _downloadFlatFile(content, fileName, asin, sku, price);
-}
-
-function _downloadFlatFile(content, fileName, asin, sku, price) {
-  const blob = new Blob([content], {type: 'text/plain'});
+  const blob = new Blob([lines.join('\n')], {type: 'text/plain'});
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
-  a.href = url; a.download = fileName;
+  a.href = url;
+  a.download = `reprice_${sku}_R${price}_${new Date().toISOString().slice(0,10)}.txt`;
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
   URL.revokeObjectURL(url);
-  showAlert('alertBox', `✅ Downloaded <b>${fileName}</b> at <b>R${price}</b>. <a href="https://sellercentral.amazon.co.za/listing/upload" target="_blank" style="color:#f97316;">Upload to Seller Central →</a>`, 'success');
-  toggleQuickReprice(asin);
+  // Show upload link
+  showAlert('alertBox', `✅ Downloaded reprice file for <b>${sku}</b> at <b>R${price}</b>. <a href="https://sellercentral.amazon.co.za/listing/upload" target="_blank" style="color:#f97316;">Upload to Seller Central →</a>`, 'success');
+  toggleQuickReprice(asin); // close the panel
 }
 
 function downloadPriceFile(type) {
@@ -1985,14 +1923,7 @@ function loadAnalytics() {
 }
 
 // ── Settings Page ─────────────────────────────────────────────────
-async function saveExtId() {
-  const val = document.getElementById('extIdInput').value.trim();
-  if (!val) { showAlert('extIdMsg', 'Please enter an extension ID', 'error'); return; }
-  localStorage.setItem('buyboxExtId', val);
-  showAlert('extIdMsg', '✅ Extension ID saved! Reprice button will now auto-upload to Seller Central.', 'success');
-}
-
-function loadSettings() {
+async function loadSettings() {
   try {
     const r = await fetch(API + '/api/alerts/settings');
     const d = await r.json();
