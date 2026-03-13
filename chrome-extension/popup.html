@@ -16,6 +16,7 @@
     <!-- Tab Navigation -->
     <div class="tabs">
       <button class="tab-btn active" data-tab="scrape">Scrape</button>
+      <button class="tab-btn" data-tab="upload">📤 Upload Price</button>
       <button class="tab-btn" data-tab="bulk">Bulk ASINs</button>
       <button class="tab-btn" data-tab="settings">Settings</button>
     </div>
@@ -31,6 +32,34 @@
         <button id="openDashboardBtn" class="btn btn-secondary" style="margin-top:8px;">🖥️ Open Dashboard</button>
       </div>
       <div id="scrapeResult" class="result-container" style="display: none;"></div>
+    </div>
+
+    <!-- ── UPLOAD PRICE FILE TAB ── -->
+    <div id="uploadTab" class="tab-content">
+      <div class="section">
+        <h3>📤 Upload Price File to Amazon</h3>
+        <p class="description">Select the flat file you downloaded from the dashboard, then click Upload. The extension will open Seller Central and submit it automatically.</p>
+
+        <div id="uploadStep1">
+          <label style="font-size:12px;color:#555;display:block;margin-bottom:6px;">Step 1 — Select your price file (.txt)</label>
+          <input type="file" id="priceFileInput" accept=".txt" style="font-size:12px;width:100%;margin-bottom:10px;"/>
+          <div id="filePreview" style="display:none;background:#f0f9f0;border:1px solid #10b981;border-radius:6px;padding:8px;font-size:11px;margin-bottom:10px;color:#065f46;"></div>
+          <button id="uploadBtn" class="btn btn-primary" disabled>🚀 Open Seller Central &amp; Upload</button>
+        </div>
+
+        <div id="uploadStep2" style="display:none;background:#fffbeb;border:1px solid #d97706;border-radius:8px;padding:12px;margin-top:10px;">
+          <p style="font-weight:600;font-size:13px;margin-bottom:8px;">⏳ Seller Central is opening...</p>
+          <ol style="font-size:12px;line-height:1.9;color:#555;padding-left:16px;margin:0;">
+            <li>Seller Central upload page should open in a new tab</li>
+            <li>The extension will auto-select <b>Price &amp; Quantity</b> template</li>
+            <li>Your file will be attached automatically</li>
+            <li>Click <b>"Upload"</b> on that page to submit</li>
+          </ol>
+          <button id="manualUploadBtn" class="btn btn-secondary" style="margin-top:10px;font-size:12px;">🔗 Open Upload Page Manually</button>
+        </div>
+
+        <div id="uploadStatus" style="display:none;margin-top:10px;"></div>
+      </div>
     </div>
 
     <!-- ── BULK ASINs TAB ── -->

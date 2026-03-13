@@ -25,8 +25,12 @@ function init() {
     document.getElementById('bulkResult').style.display = 'none';
   });
 
-  // Settings tab
-  document.getElementById('saveSettingsBtn').addEventListener('click', saveSettings);
+  // Upload tab
+  document.getElementById('priceFileInput').addEventListener('change', onPriceFileSelected);
+  document.getElementById('uploadBtn').addEventListener('click', startUpload);
+  document.getElementById('manualUploadBtn').addEventListener('click', () => {
+    chrome.tabs.create({ url: 'https://sellercentral.amazon.co.za/listing/upload' });
+  });
   document.getElementById('testConnectionBtn').addEventListener('click', testConnection);
 
   checkAmazonPage();
@@ -236,6 +240,133 @@ async function submitBulkASINs() {
   } finally {
     document.getElementById('bulkSubmitBtn').disabled = false;
   }
+}
+
+// ─── Price File Upload ────────────────────────────────────────────────────────
+let selectedFileContent = null;
+let selectedFileName = null;
+
+function onPriceFileSelected(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  selectedFileName = file.name;
+  const reader = new FileReader();
+  reader.onload = (ev) => {
+    selectedFileContent = ev.target.result;
+    const lines = selectedFileContent.split('\n').filter(l => l.trim() && !l.startsWith('Template') && !l.startsWith('sku'));
+    const skuCount = lines.length;
+    const preview = document.getElementById('filePreview');
+    preview.innerHTML = `✅ <b>${file.name}</b> — ${skuCount} SKU${skuCount !== 1 ? 's' : ''} ready to upload`;
+    preview.style.display = 'block';
+    document.getElementById('uploadBtn').disabled = false;
+  };
+  reader.readAsText(file);
+}
+
+async function startUpload() {
+  if (!selectedFileContent) return;
+
+  document.getElementById('uploadStep2').style.display = 'block';
+  document.getElementById('uploadBtn').disabled = true;
+
+  // Store file content in chrome storage so the content script can read it
+  await chrome.storage.local.set({
+    pendingUploadContent: selectedFileContent,
+    pendingUploadName: selectedFileName,
+    pendingUploadTimestamp: Date.now()
+  });
+
+  // Open Seller Central upload page — content script will auto-attach the file
+  chrome.tabs.create({
+    url: 'https://sellercentral.amazon.co.za/listing/upload?ref=su_ui'
+  }, (tab) => {
+    // Listen for the tab to finish loading then inject the upload script
+    const onUpdated = (tabId, info) => {
+      if (tabId !== tab.id || info.status !== 'complete') return;
+      chrome.tabs.onUpdated.removeListener(onUpdated);
+      // Give the page 2 seconds to fully render
+      setTimeout(() => {
+        chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          func: autoAttachPriceFile
+        }).catch(err => console.error('Script inject error:', err));
+      }, 2500);
+    };
+    chrome.tabs.onUpdated.addListener(onUpdated);
+  });
+
+  const status = document.getElementById('uploadStatus');
+  status.style.display = 'block';
+  status.innerHTML = '<div style="background:#d1fae5;border:1px solid #10b981;border-radius:6px;padding:8px;font-size:12px;color:#065f46;">✅ Seller Central opening — file will be auto-attached. Click <b>Upload</b> on that page to submit.</div>';
+}
+
+// This function is injected into the Seller Central page
+async function autoAttachPriceFile() {
+  // Read file from chrome storage
+  const result = await chrome.storage.local.get(['pendingUploadContent', 'pendingUploadName']);
+  if (!result.pendingUploadContent) return;
+
+  const content = result.pendingUploadContent;
+  const fileName = result.pendingUploadName || 'amazon_reprice.txt';
+
+  // Step 1: Select "Price & Quantity" from the template dropdown
+  const trySelectTemplate = () => {
+    const selects = document.querySelectorAll('select');
+    for (const sel of selects) {
+      for (const opt of sel.options) {
+        if (/price.*quantity|price.*inventory/i.test(opt.text)) {
+          sel.value = opt.value;
+          sel.dispatchEvent(new Event('change', { bubbles: true }));
+          console.log('✅ Selected template:', opt.text);
+          return true;
+        }
+      }
+    }
+    // Try clicking a radio/button option
+    const labels = document.querySelectorAll('label, span, div');
+    for (const el of labels) {
+      if (/price.*quantity/i.test(el.textContent.trim())) {
+        el.click();
+        console.log('✅ Clicked template option:', el.textContent.trim());
+        return true;
+      }
+    }
+    return false;
+  };
+
+  // Step 2: Attach file to the file input
+  const attachFile = () => {
+    const fileInput = document.querySelector('input[type="file"]');
+    if (!fileInput) {
+      console.warn('⚠️ No file input found on page');
+      return false;
+    }
+    const blob = new Blob([content], { type: 'text/plain' });
+    const file = new File([blob], fileName, { type: 'text/plain' });
+    const dt = new DataTransfer();
+    dt.items.add(file);
+    fileInput.files = dt.files;
+    fileInput.dispatchEvent(new Event('change', { bubbles: true }));
+    console.log('✅ File attached:', fileName);
+    return true;
+  };
+
+  // Try immediately, then retry after 2s if page hasn't fully rendered
+  trySelectTemplate();
+  const attached = attachFile();
+  if (!attached) {
+    setTimeout(() => {
+      trySelectTemplate();
+      attachFile();
+    }, 2000);
+  }
+
+  // Show indicator on the page
+  const banner = document.createElement('div');
+  banner.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#f97316;color:#fff;padding:12px 20px;font-size:14px;font-weight:bold;z-index:99999;text-align:center;';
+  banner.innerHTML = `🤖 Buybox Tracker: File "${fileName}" attached automatically. Review below then click <b>Upload</b>.`;
+  document.body.prepend(banner);
+  setTimeout(() => banner.remove(), 10000);
 }
 
 // ─── Status bar ───────────────────────────────────────────────────────────────

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Amazon Buybox Tracker",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Track Amazon buybox prices and sellers in real-time with 0% bot detection",
   "permissions": [
     "activeTab",
@@ -20,7 +20,8 @@
     "https://*.amazon.ca/*",
     "https://*.amazon.com.au/*",
     "https://*.amazon.co.za/*",
-    "https://*.onrender.com/*"
+    "https://*.onrender.com/*",
+    "https://sellercentral.amazon.co.za/*"
   ],
   "background": {
     "service_worker": "background.js"
