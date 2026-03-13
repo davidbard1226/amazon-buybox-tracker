@@ -37,60 +37,67 @@ def _get_lwa_token() -> str:
 
 # ── Step 2: AWS STS AssumeRole → temporary credentials ───────
 def _assume_role() -> dict:
-    """Use IAM user creds to assume the BonoloBuyboxSPAPI role, get temp creds."""
-    role_arn = "arn:aws:iam::397348547272:role/BonoloBuyboxSPAPI"
+    """Use IAM user creds to assume BonoloBuyboxSPAPI role via STS POST."""
+    role_arn   = "arn:aws:iam::397348547272:role/BonoloBuyboxSPAPI"
     aws_key    = _r("AWS_ACCESS_KEY_ID")
     aws_secret = _r("AWS_SECRET_ACCESS_KEY")
     region     = "us-east-1"
     service    = "sts"
+    host       = "sts.amazonaws.com"
 
     now        = datetime.now(timezone.utc)
     amz_date   = now.strftime("%Y%m%dT%H%M%SZ")
     date_stamp = now.strftime("%Y%m%d")
 
+    # POST body — URL-encoded params sorted alphabetically
     params = {
         "Action":          "AssumeRole",
+        "DurationSeconds": "3600",
         "RoleArn":         role_arn,
         "RoleSessionName": "BonoloBuyboxSession",
-        "DurationSeconds": "3600",
         "Version":         "2011-06-15",
     }
-    qs = urllib.parse.urlencode(sorted(params.items()))
-    host = "sts.amazonaws.com"
-    url  = f"https://{host}/?{qs}"
-
-    payload_hash   = hashlib.sha256(b"").hexdigest()
-    canonical_hdrs = f"host:{host}\nx-amz-date:{amz_date}\n"
-    signed_hdrs    = "host;x-amz-date"
-    canonical_req  = f"GET\n/\n{qs}\n{canonical_hdrs}\n{signed_hdrs}\n{payload_hash}"
-
-    cred_scope  = f"{date_stamp}/{region}/{service}/aws4_request"
-    str_to_sign = (f"AWS4-HMAC-SHA256\n{amz_date}\n{cred_scope}\n"
-                   f"{hashlib.sha256(canonical_req.encode()).hexdigest()}")
+    body = urllib.parse.urlencode(sorted(params.items()))
 
     def _hmac(key, msg):
         k = key if isinstance(key, bytes) else key.encode()
         return hmac_module.new(k, msg.encode(), hashlib.sha256).digest()
+
+    payload_hash   = hashlib.sha256(body.encode()).hexdigest()
+    canonical_hdrs = (f"content-type:application/x-www-form-urlencoded\n"
+                      f"host:{host}\n"
+                      f"x-amz-date:{amz_date}\n")
+    signed_hdrs    = "content-type;host;x-amz-date"
+    canonical_req  = f"POST\n/\n\n{canonical_hdrs}\n{signed_hdrs}\n{payload_hash}"
+
+    cred_scope  = f"{date_stamp}/{region}/{service}/aws4_request"
+    str_to_sign = (f"AWS4-HMAC-SHA256\n{amz_date}\n{cred_scope}\n"
+                   f"{hashlib.sha256(canonical_req.encode()).hexdigest()}")
 
     signing_key = _hmac(_hmac(_hmac(_hmac(f"AWS4{aws_secret}", date_stamp), region), service), "aws4_request")
     signature   = hmac_module.new(signing_key, str_to_sign.encode(), hashlib.sha256).hexdigest()
     auth = (f"AWS4-HMAC-SHA256 Credential={aws_key}/{cred_scope}, "
             f"SignedHeaders={signed_hdrs}, Signature={signature}")
 
-    resp = req.get(url, headers={"host": host, "x-amz-date": amz_date, "Authorization": auth}, timeout=15)
+    headers = {
+        "Content-Type":  "application/x-www-form-urlencoded",
+        "host":          host,
+        "x-amz-date":    amz_date,
+        "Authorization": auth,
+    }
+    resp = req.post(f"https://{host}/", headers=headers, data=body, timeout=15)
     if resp.status_code != 200:
-        raise Exception(f"STS AssumeRole failed {resp.status_code}: {resp.text[:300]}")
+        raise Exception(f"STS AssumeRole failed {resp.status_code}: {resp.text[:400]}")
 
-    # Parse XML response
     import re
-    def _xml(tag): 
-        m = re.search(rf"<{tag}>(.*?)</{tag}>", resp.text)
-        return m.group(1) if m else None
+    def _xml(tag):
+        m = re.search(rf"<{tag}>(.*?)</{tag}>", resp.text, re.DOTALL)
+        return m.group(1).strip() if m else None
 
     return {
-        "key":     _xml("AccessKeyId"),
-        "secret":  _xml("SecretAccessKey"),
-        "token":   _xml("SessionToken"),
+        "key":    _xml("AccessKeyId"),
+        "secret": _xml("SecretAccessKey"),
+        "token":  _xml("SessionToken"),
     }
 
 
