@@ -796,9 +796,37 @@ function renderTable() {
           <button class="btn btn-primary btn-sm" title="Refresh via Extension" onclick="quickRefresh('${p.asin}','${p.marketplace}')">🔄</button>
           <button class="btn btn-sm" style="background:#334155;color:#e2e8f0;" title="View Price History" onclick="viewHistory('${p.asin}')">📈</button>
           ${p.sku ? `<button class="btn btn-sm" style="background:#065f46;color:#6ee7b7;border:1px solid #10b981;" title="Push My Price to Amazon via SP-API" onclick="pushPrice('${p.asin}','${(p.sku||'').replace(/'/g,"\\'")}',${p.my_price||0})">💸 Push</button>` : ''}
-          ${p.sku && p.my_price ? `<button class="btn btn-sm" style="background:#1e1a4a;color:#c4b5fd;border:1px solid #7c3aed;" title="Download price file for this SKU — upload to Seller Central" onclick="downloadSinglePriceFile('${(p.sku||'').replace(/'/g,"\\'")}',${p.my_price})">📥</button>` : ''}
+          ${p.sku ? `<button class="btn btn-sm" style="background:#2d1a00;color:#fcd34d;border:1px solid #d97706;" title="Quick reprice: set price & download flat file" onclick="toggleQuickReprice('${p.asin}')">🤖 Reprice</button>` : ''}
           <button class="btn btn-danger btn-sm" title="Remove" onclick="removeASIN('${p.asin}')">🗑</button>
         </div>
+      </td>
+    </tr>
+    <tr id="qr-${p.asin}" style="display:none;background:#1a1200;">
+      <td colspan="18" style="padding:10px 16px;">
+        ${(() => {
+          if (!p.sku) return '';
+          const AMZN_FEE = 0.06;
+          const cost = p.cost_price ? Number(p.cost_price) : null;
+          const floor = cost ? Math.ceil(cost / (1 - AMZN_FEE - 0.05)) : null;
+          const bb = p.buybox_price ? Number(p.buybox_price) : null;
+          let suggested = bb ? Math.round(bb - 1) : (p.my_price ? Math.round(Number(p.my_price)) : '');
+          if (floor && suggested && suggested < floor) suggested = floor;
+          const profit = (cost && suggested) ? Math.round(suggested * (1 - AMZN_FEE) - cost) : null;
+          return `<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+            <span style="color:#fcd34d;font-weight:600;font-size:0.85rem;">🤖 Quick Reprice — ${p.sku}</span>
+            ${bb ? `<span style="font-size:0.8rem;color:#94a3b8;">Buybox: <b style="color:#a78bfa;">R${Math.round(bb)}</b></span>` : ''}
+            ${floor ? `<span style="font-size:0.8rem;color:#94a3b8;">Floor: <b style="color:#ef4444;">R${floor}</b></span>` : ''}
+            <span style="font-size:0.8rem;color:#94a3b8;">New Price:</span>
+            <input type="number" step="1" min="${floor||1}" id="qr-input-${p.asin}" value="${suggested}"
+              style="width:90px;padding:5px 10px;font-size:0.9rem;font-weight:700;color:#fcd34d;background:#0f172a;border:1px solid #d97706;border-radius:6px;text-align:right;"
+              oninput="updateQrProfit('${p.asin}',${cost||0},${AMZN_FEE},${floor||0})"/>
+            <span id="qr-profit-${p.asin}" style="font-size:0.8rem;font-weight:600;color:${profit!==null?(profit>=0?'#10b981':'#ef4444'):'#94a3b8'};">${profit !== null ? (profit >= 0 ? '+' : '') + 'R' + Math.abs(profit) + ' profit' : ''}</span>
+            <button onclick="downloadQuickReprice('${p.asin}','${(p.sku||'').replace(/'/g,"\\'")}')"
+              style="padding:6px 14px;background:#d97706;border:none;color:#fff;border-radius:6px;font-weight:700;font-size:0.85rem;cursor:pointer;">📥 Download & Upload</button>
+            <button onclick="toggleQuickReprice('${p.asin}')"
+              style="padding:6px 10px;background:#334155;border:none;color:#94a3b8;border-radius:6px;font-size:0.85rem;cursor:pointer;">✕</button>
+          </div>`;
+        })()}
       </td>
     </tr>`;
   }).join('');
@@ -1233,6 +1261,60 @@ function downloadRepriceSelection() {
   </div>`;
 }
 
+
+// ── Quick Per-Row Reprice ─────────────────────────────────────────
+function toggleQuickReprice(asin) {
+  const row = document.getElementById('qr-' + asin);
+  if (!row) return;
+  const isVisible = row.style.display !== 'none';
+  // Close all others first
+  document.querySelectorAll('[id^="qr-"]').forEach(r => r.style.display = 'none');
+  if (!isVisible) row.style.display = 'table-row';
+}
+
+function updateQrProfit(asin, cost, fee, floor) {
+  const inp = document.getElementById('qr-input-' + asin);
+  const profitEl = document.getElementById('qr-profit-' + asin);
+  if (!inp || !profitEl) return;
+  const price = parseFloat(inp.value);
+  if (isNaN(price) || price <= 0) { profitEl.textContent = ''; return; }
+  // Warn if below floor
+  if (floor && price < floor) {
+    inp.style.borderColor = '#ef4444';
+    profitEl.textContent = `⚠️ Below floor (R${floor})`;
+    profitEl.style.color = '#ef4444';
+    return;
+  }
+  inp.style.borderColor = '#d97706';
+  const profit = cost ? Math.round(price * (1 - fee) - cost) : null;
+  if (profit !== null) {
+    profitEl.textContent = (profit >= 0 ? '+' : '') + 'R' + Math.abs(profit) + ' profit';
+    profitEl.style.color = profit >= 0 ? '#10b981' : '#ef4444';
+  }
+}
+
+function downloadQuickReprice(asin, sku) {
+  const inp = document.getElementById('qr-input-' + asin);
+  if (!inp) return;
+  const price = Math.round(parseFloat(inp.value));
+  if (isNaN(price) || price <= 0) { alert('Enter a valid price first.'); return; }
+  const lines = [
+    'TemplateType=PriceInventory\tVersion=2014.0301',
+    ['sku','price','minimum-seller-allowed-price','maximum-seller-allowed-price','quantity','leadtime-to-ship','fulfillment-channel'].join('\t'),
+    ['sku','price','minimum-seller-allowed-price','maximum-seller-allowed-price','quantity','leadtime-to-ship','fulfillment-channel'].join('\t'),
+    [sku, price.toFixed(2), '', '', '', '', 'DEFAULT'].join('\t'),
+  ];
+  const blob = new Blob([lines.join('\n')], {type: 'text/plain'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `reprice_${sku}_R${price}_${new Date().toISOString().slice(0,10)}.txt`;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  // Show upload link
+  showAlert('alertBox', `✅ Downloaded reprice file for <b>${sku}</b> at <b>R${price}</b>. <a href="https://sellercentral.amazon.co.za/listing/upload" target="_blank" style="color:#f97316;">Upload to Seller Central →</a>`, 'success');
+  toggleQuickReprice(asin); // close the panel
+}
 
 function downloadPriceFile(type) {
   // type = 'all' or 'reprice'
