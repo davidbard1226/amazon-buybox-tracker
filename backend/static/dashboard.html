@@ -1247,19 +1247,38 @@ function downloadRepriceSelection() {
   selected.forEach(r => {
     lines.push([r.sku, Math.round(r.newPrice).toFixed(2), '', '', '', '', 'DEFAULT'].join('\t'));
   });
+  const fileName = `amazon_reprice_${selected.length}products_${new Date().toISOString().slice(0,10)}.txt`;
   const content = lines.join('\n');
+
+  // Try extension auto-upload first
+  try {
+    if (window.chrome && chrome.runtime) {
+      chrome.runtime.sendMessage(
+        { action: 'autoUploadPriceFile', content, fileName, skuCount: selected.length },
+        (resp) => {
+          if (chrome.runtime.lastError || !resp || !resp.success) {
+            _downloadAndShowLink(content, fileName, selected.length);
+          } else {
+            document.getElementById('repriceAlert').innerHTML = `<div class="alert alert-success">🤖 Extension uploading <b>${selected.length} products</b> to Seller Central automatically...</div>`;
+          }
+        }
+      );
+      return;
+    }
+  } catch(e) {}
+  _downloadAndShowLink(content, fileName, selected.length);
+}
+
+function _downloadAndShowLink(content, fileName, count) {
   const blob = new Blob([content], {type: 'text/plain'});
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
-  a.href = url;
-  a.download = `amazon_reprice_${selected.length}products_${new Date().toISOString().slice(0,10)}.txt`;
+  a.href = url; a.download = fileName;
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
   URL.revokeObjectURL(url);
-
   document.getElementById('repriceAlert').innerHTML = `<div class="alert alert-success">
-    ✅ Downloaded price file for <b>${selected.length} product(s)</b>.<br>
-    <b>Next:</b> Go to <a href="https://sellercentral.amazon.co.za/listing/upload" target="_blank" style="color:#f97316;">Seller Central → Inventory → Upload products & inventory</a>,
-    choose <b>Price & Quantity</b>, upload the file. Prices update within ~15 minutes.
+    ✅ Downloaded price file for <b>${count} product(s)</b>.<br>
+    <b>Next:</b> Go to <a href="https://sellercentral.amazon.co.za/listing/upload" target="_blank" style="color:#f97316;">Seller Central → Upload</a> and submit the file.
   </div>`;
 }
 
@@ -1300,22 +1319,51 @@ function downloadQuickReprice(asin, sku) {
   if (!inp) return;
   const price = Math.round(parseFloat(inp.value));
   if (isNaN(price) || price <= 0) { alert('Enter a valid price first.'); return; }
+
+  // Build flat file
   const lines = [
     'TemplateType=PriceInventory\tVersion=2014.0301',
     ['sku','price','minimum-seller-allowed-price','maximum-seller-allowed-price','quantity','leadtime-to-ship','fulfillment-channel'].join('\t'),
     ['sku','price','minimum-seller-allowed-price','maximum-seller-allowed-price','quantity','leadtime-to-ship','fulfillment-channel'].join('\t'),
     [sku, price.toFixed(2), '', '', '', '', 'DEFAULT'].join('\t'),
   ];
-  const blob = new Blob([lines.join('\n')], {type: 'text/plain'});
+  const content = lines.join('\n');
+  const fileName = `reprice_${sku}_R${price}_${new Date().toISOString().slice(0,10)}.txt`;
+
+  // Try to send directly to Chrome extension for auto-upload
+  try {
+    const extId = typeof EXTENSION_ID !== 'undefined' ? EXTENSION_ID : null;
+    if (window.chrome && chrome.runtime) {
+      // We're on a page where extension messaging works — send to background
+      chrome.runtime.sendMessage(
+        { action: 'autoUploadPriceFile', content, fileName, skuCount: 1 },
+        (resp) => {
+          if (chrome.runtime.lastError || !resp || !resp.success) {
+            // Extension not reachable — fall back to download
+            _downloadFlatFile(content, fileName, asin, sku, price);
+          } else {
+            showAlert('alertBox', `🤖 Extension is uploading <b>R${price}</b> for <b>${sku}</b> to Seller Central automatically...`, 'success');
+            toggleQuickReprice(asin);
+          }
+        }
+      );
+      return;
+    }
+  } catch(e) {}
+
+  // Fallback: just download the file
+  _downloadFlatFile(content, fileName, asin, sku, price);
+}
+
+function _downloadFlatFile(content, fileName, asin, sku, price) {
+  const blob = new Blob([content], {type: 'text/plain'});
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
-  a.href = url;
-  a.download = `reprice_${sku}_R${price}_${new Date().toISOString().slice(0,10)}.txt`;
+  a.href = url; a.download = fileName;
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
   URL.revokeObjectURL(url);
-  // Show upload link
-  showAlert('alertBox', `✅ Downloaded reprice file for <b>${sku}</b> at <b>R${price}</b>. <a href="https://sellercentral.amazon.co.za/listing/upload" target="_blank" style="color:#f97316;">Upload to Seller Central →</a>`, 'success');
-  toggleQuickReprice(asin); // close the panel
+  showAlert('alertBox', `✅ Downloaded <b>${fileName}</b> at <b>R${price}</b>. <a href="https://sellercentral.amazon.co.za/listing/upload" target="_blank" style="color:#f97316;">Upload to Seller Central →</a>`, 'success');
+  toggleQuickReprice(asin);
 }
 
 function downloadPriceFile(type) {

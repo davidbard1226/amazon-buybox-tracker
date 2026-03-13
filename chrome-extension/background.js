@@ -50,6 +50,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 
+  // Dashboard asks extension to auto-upload a price file to Seller Central
+  if (request.action === 'autoUploadPriceFile') {
+    handleAutoUpload(request.content, request.fileName, request.skuCount)
+      .then(result => sendResponse({ success: true, result }))
+      .catch(error => sendResponse({ success: false, error: error.message }));
+    return true;
+  }
+
   // Dashboard asks extension to scrape a specific ASIN URL
   if (request.action === 'scrapeAsinUrl') {
     scrapeAsinInTab(request.asin, request.marketplace)
@@ -484,7 +492,144 @@ async function scrapeAsinInTab(asin, marketplace) {
   });
 }
 
-// ─── Bulk ASIN handler: send all ASINs to backend bulk-start endpoint ─────────
+// ─── Auto-upload price file to Seller Central ────────────────────────────────
+async function handleAutoUpload(content, fileName, skuCount) {
+  // Save to local storage so the injected script can read it
+  await chrome.storage.local.set({
+    pendingUploadContent: content,
+    pendingUploadName: fileName || 'amazon_reprice.txt',
+    pendingUploadTimestamp: Date.now()
+  });
+
+  return new Promise((resolve, reject) => {
+    chrome.tabs.create({
+      url: 'https://sellercentral.amazon.co.za/listing/upload?ref=su_ui',
+      active: true
+    }, (tab) => {
+      const onUpdated = (tabId, info) => {
+        if (tabId !== tab.id || info.status !== 'complete') return;
+        chrome.tabs.onUpdated.removeListener(onUpdated);
+
+        // Wait 3s for page JS to fully render then inject
+        setTimeout(async () => {
+          try {
+            await chrome.scripting.executeScript({
+              target: { tabId: tab.id },
+              func: sellerCentralAutoUpload
+            });
+            resolve({ tabId: tab.id, message: 'Upload script injected' });
+          } catch (err) {
+            reject(new Error('Failed to inject upload script: ' + err.message));
+          }
+        }, 3000);
+      };
+      chrome.tabs.onUpdated.addListener(onUpdated);
+
+      // Timeout after 30s
+      setTimeout(() => {
+        chrome.tabs.onUpdated.removeListener(onUpdated);
+        resolve({ message: 'Tab opened — upload manually if needed' });
+      }, 30000);
+    });
+  });
+}
+
+// Injected into Seller Central upload page — handles the full upload flow
+async function sellerCentralAutoUpload() {
+  const stored = await chrome.storage.local.get(['pendingUploadContent', 'pendingUploadName']);
+  if (!stored.pendingUploadContent) { console.warn('No pending upload found'); return; }
+
+  const content  = stored.pendingUploadContent;
+  const fileName = stored.pendingUploadName || 'amazon_reprice.txt';
+
+  // Show banner
+  const banner = document.createElement('div');
+  banner.id = 'bb-upload-banner';
+  banner.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#f97316;color:#fff;padding:14px 20px;font-size:14px;font-weight:bold;z-index:99999;text-align:center;box-shadow:0 2px 8px rgba(0,0,0,0.3);';
+  banner.innerHTML = '🤖 Buybox Tracker: Attaching price file automatically...';
+  document.body.prepend(banner);
+
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+
+  // Step 1: Select "Price & Quantity" template
+  const selectTemplate = async () => {
+    // Try dropdown
+    const selects = document.querySelectorAll('select');
+    for (const sel of selects) {
+      for (const opt of sel.options) {
+        if (/price.*quant|price.*invent/i.test(opt.text)) {
+          sel.value = opt.value;
+          sel.dispatchEvent(new Event('change', { bubbles: true }));
+          await wait(1000);
+          return true;
+        }
+      }
+    }
+    // Try radio buttons / clickable labels
+    const all = document.querySelectorAll('label, input[type="radio"], span, li');
+    for (const el of all) {
+      const t = el.textContent.trim();
+      if (/price.*quant/i.test(t) && t.length < 60) {
+        el.click();
+        await wait(1000);
+        return true;
+      }
+    }
+    return false;
+  };
+
+  // Step 2: Attach the file
+  const attachFile = async () => {
+    const fileInput = document.querySelector('input[type="file"]');
+    if (!fileInput) return false;
+    const blob = new Blob([content], { type: 'text/plain' });
+    const file = new File([blob], fileName, { type: 'text/plain' });
+    const dt = new DataTransfer();
+    dt.items.add(file);
+    fileInput.files = dt.files;
+    fileInput.dispatchEvent(new Event('change', { bubbles: true }));
+    fileInput.dispatchEvent(new Event('input', { bubbles: true }));
+    await wait(1500);
+    return true;
+  };
+
+  // Step 3: Click upload/submit button
+  const clickUpload = async () => {
+    const btns = document.querySelectorAll('button, input[type="submit"], a');
+    for (const btn of btns) {
+      const t = (btn.textContent || btn.value || '').trim();
+      if (/^upload$|^submit$|upload file|upload now/i.test(t)) {
+        btn.click();
+        return true;
+      }
+    }
+    return false;
+  };
+
+  await selectTemplate();
+  const attached = await attachFile();
+
+  if (attached) {
+    banner.innerHTML = '🤖 Buybox Tracker: File attached ✅ — clicking Upload...';
+    await wait(1000);
+    const clicked = await clickUpload();
+    if (clicked) {
+      banner.style.background = '#10b981';
+      banner.innerHTML = '✅ Buybox Tracker: Price file uploaded! Amazon will update prices within 15-30 minutes.';
+      // Clear pending upload
+      chrome.storage.local.remove(['pendingUploadContent', 'pendingUploadName', 'pendingUploadTimestamp']);
+    } else {
+      banner.innerHTML = '🤖 Buybox Tracker: File attached ✅ — please click <b>Upload</b> to submit.';
+    }
+  } else {
+    banner.style.background = '#ef4444';
+    banner.innerHTML = '❌ Buybox Tracker: Could not attach file automatically. Please upload manually.';
+  }
+
+  setTimeout(() => banner.remove(), 15000);
+}
+
+// ─── Bulk ASIN handler ────────────────────────────────────────────────────────
 async function handleBulkASINs(asins, marketplace) {
   const backendUrl = await getBackendUrl();
   const url = `${backendUrl}/api/buybox/bulk-start`;
