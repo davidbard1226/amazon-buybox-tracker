@@ -52,6 +52,8 @@ table{width:100%;border-collapse:collapse;font-size:0.95rem;}
 th{background:#0f172a;padding:13px 16px;text-align:left;color:#94a3b8;font-weight:600;font-size:0.85rem;text-transform:uppercase;letter-spacing:0.05em;border-bottom:1px solid #334155;white-space:nowrap;}
 td{padding:13px 16px;border-bottom:1px solid #1e293b;vertical-align:middle;}
 tr:hover td{background:rgba(255,255,255,0.02);}
+tr[id^="qr-"]:hover td{background:#1a1200;}
+tr[id^="qr-"] td input{pointer-events:auto;position:relative;z-index:20;}
 .status-badge{display:inline-flex;align-items:center;gap:5px;padding:5px 14px;border-radius:12px;font-size:0.875rem;font-weight:600;white-space:nowrap;}
 .status-winning{background:rgba(16,185,129,0.15);color:#10b981;border:1px solid rgba(16,185,129,0.3);}
 .status-losing{background:rgba(239,68,68,0.15);color:#ef4444;border:1px solid rgba(239,68,68,0.3);}
@@ -801,8 +803,8 @@ function renderTable() {
         </div>
       </td>
     </tr>
-    <tr id="qr-${p.asin}" style="display:none;background:#1a1200;">
-      <td colspan="18" style="padding:10px 16px;">
+    <tr id="qr-${p.asin}" style="display:none;background:#1a1200;pointer-events:auto;">
+      <td colspan="18" style="padding:10px 16px;pointer-events:auto;">
         ${(() => {
           if (!p.sku) return '';
           const AMZN_FEE = 0.06;
@@ -818,7 +820,7 @@ function renderTable() {
             ${floor ? `<span style="font-size:0.8rem;color:#94a3b8;">Floor: <b style="color:#ef4444;">R${floor}</b></span>` : ''}
             <span style="font-size:0.8rem;color:#94a3b8;">New Price:</span>
             <input type="number" step="1" min="${floor||1}" id="qr-input-${p.asin}" value="${suggested}"
-              style="width:90px;padding:5px 10px;font-size:0.9rem;font-weight:700;color:#fcd34d;background:#0f172a;border:1px solid #d97706;border-radius:6px;text-align:right;"
+              style="width:90px;padding:5px 10px;font-size:0.9rem;font-weight:700;color:#fcd34d;background:#0f172a;border:1px solid #d97706;border-radius:6px;text-align:right;position:relative;z-index:10;"
               oninput="updateQrProfit('${p.asin}',${cost||0},${AMZN_FEE},${floor||0})"/>
             <span id="qr-profit-${p.asin}" style="font-size:0.8rem;font-weight:600;color:${profit!==null?(profit>=0?'#10b981':'#ef4444'):'#94a3b8'};">${profit !== null ? (profit >= 0 ? '+' : '') + 'R' + Math.abs(profit) + ' profit' : ''}</span>
             <button onclick="downloadQuickReprice('${p.asin}','${(p.sku||'').replace(/'/g,"\\'")}')"
