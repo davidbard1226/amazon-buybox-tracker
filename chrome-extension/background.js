@@ -560,6 +560,88 @@ async function sellerCentralAutoUpload() {
   banner.innerHTML = '🤖 Buybox Tracker: Attaching price file...';
   document.body.prepend(banner);
 
+  // Pierce shadow DOM to find file input inside kat-button#select-file
+  const findFileInput = () => {
+    // Check regular DOM first
+    for (const inp of document.querySelectorAll('input[type="file"]')) {
+      if (inp.id !== 'imageFileInput') return inp;
+    }
+    // Pierce shadow roots — kat-button#select-file has a shadow root with the real input
+    const katBtn = document.querySelector('kat-button#select-file');
+    if (katBtn && katBtn.shadowRoot) {
+      const inp = katBtn.shadowRoot.querySelector('input[type="file"]');
+      if (inp) return inp;
+    }
+    // Search all elements with shadow roots
+    for (const el of document.querySelectorAll('*')) {
+      if (el.shadowRoot) {
+        const inp = el.shadowRoot.querySelector('input[type="file"]');
+        if (inp && inp.id !== 'imageFileInput') return inp;
+      }
+    }
+    return null;
+  };
+
+  // Attach file to input
+  const attachFile = async () => {
+    const fileInput = findFileInput();
+    if (!fileInput) return false;
+    const blob = new Blob([content], { type: 'text/plain' });
+    const file = new File([blob], fileName, { type: 'text/plain' });
+    const dt   = new DataTransfer();
+    dt.items.add(file);
+    fileInput.files = dt.files;
+    fileInput.dispatchEvent(new Event('change', { bubbles: true }));
+    fileInput.dispatchEvent(new Event('input',  { bubbles: true }));
+    await wait(2000);
+    return true;
+  };
+
+  // Click Submit products button — it's a <button> with span text "Submit products"
+  const clickSubmit = async () => {
+    // Look for button containing "Submit products" text
+    for (const btn of document.querySelectorAll('button')) {
+      if (/submit products/i.test(btn.textContent)) {
+        btn.click();
+        return true;
+      }
+    }
+    // Also check kat-button elements
+    for (const btn of document.querySelectorAll('kat-button')) {
+      if (/submit/i.test(btn.getAttribute('label') || btn.textContent)) {
+        btn.click();
+        if (btn.shadowRoot) {
+          const inner = btn.shadowRoot.querySelector('button');
+          if (inner) inner.click();
+        }
+        return true;
+      }
+    }
+    return false;
+  };
+
+  await wait(500);
+  const attached = await attachFile();
+
+  if (attached) {
+    banner.innerHTML = '🤖 File attached ✅ — waiting for page to process then clicking Submit...';
+    await wait(3000); // wait for Amazon to detect file and enable Submit button
+    const submitted = await clickSubmit();
+    if (submitted) {
+      banner.style.background = '#10b981';
+      banner.innerHTML = '✅ Submitted! Amazon will update prices in 15-30 minutes.';
+      chrome.storage.local.remove(['pendingUploadContent', 'pendingUploadName', 'pendingUploadTimestamp']);
+    } else {
+      banner.innerHTML = '🤖 File attached ✅ — please click <b>Submit products</b> to finish.';
+    }
+  } else {
+    banner.style.background = '#ef4444';
+    banner.innerHTML = '❌ Could not attach file automatically. Please upload manually.';
+  }
+
+  setTimeout(() => banner.remove(), 20000);
+}
+
   // The page is /product-search/bulk — find the file drop zone input
   // It's NOT imageFileInput (that's for images) — it's the hidden input behind the "Upload file" button
   const attachFile = async () => {
