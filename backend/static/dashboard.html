@@ -1338,9 +1338,10 @@ function downloadQuickReprice(asin, sku) {
       }
     });
   } else {
-    // No extension ID — just download
+    // No extension ID — download file and open Seller Central tab automatically
     _doDownload(content, fileName);
-    showAlert('alertBox', `✅ Downloaded for <b>${sku}</b> at <b>R${price}</b>. <a href="https://sellercentral.amazon.co.za/listing/upload" target="_blank" style="color:#f97316;">Upload to Seller Central →</a>`, 'success');
+    window.open('https://sellercentral.amazon.co.za/product-search/bulk', '_blank');
+    showAlert('alertBox', `✅ File downloaded + Seller Central opened. Drag the file onto the upload box → click <b>Submit products</b>.`, 'success');
   }
   toggleQuickReprice(asin);
 }
