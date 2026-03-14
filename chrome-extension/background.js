@@ -703,43 +703,6 @@ async function sellerCentralAutoUpload() {
     return true;
   };
 
-  await wait(1000);
-  let ok = await attachFile();
-  if (!ok) ok = await dropFile();
-
-  if (ok) {
-    banner.innerHTML = '🤖 File attached ✅ — looking for Upload button...';
-    await wait(2000);
-    // Try every possible button/element that could be the upload trigger
-    let clicked = false;
-    const allEls = [...document.querySelectorAll('button, input[type="submit"], span[role="button"], div[role="button"], a[role="button"]')];
-    for (const el of allEls) {
-      const t = (el.textContent || el.value || el.getAttribute('aria-label') || '').trim().toLowerCase();
-      const id = (el.id || '').toLowerCase();
-      if (t === 'upload' || t === 'submit' || t === 'upload file' || t === 'upload now' ||
-          id === 'upload' || id === 'submit-btn' || id.includes('upload-btn') ||
-          /^upload/i.test(t)) {
-        console.log('🤖 Clicking:', el.tagName, el.id, t);
-        el.click();
-        clicked = true;
-        break;
-      }
-    }
-    if (clicked) {
-      banner.style.background = '#10b981';
-      banner.innerHTML = '✅ Price file uploaded! Amazon will update prices in 15-30 minutes.';
-      chrome.storage.local.remove(['pendingUploadContent', 'pendingUploadName', 'pendingUploadTimestamp']);
-    } else {
-      banner.innerHTML = '🤖 File attached ✅ — please click <b>Upload</b> to submit.';
-    }
-  } else {
-    banner.style.background = '#ef4444';
-    banner.innerHTML = '❌ Could not attach file. Please drag and drop the file manually onto the upload area.';
-  }
-
-  setTimeout(() => banner.remove(), 20000);
-}
-
 // ─── Bulk ASIN handler ────────────────────────────────────────────────────────
 async function handleBulkASINs(asins, marketplace) {
   const backendUrl = await getBackendUrl();
