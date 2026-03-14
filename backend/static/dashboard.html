@@ -118,6 +118,7 @@ tr[id^="qr-"] td input{pointer-events:auto;position:relative;z-index:20;}
       <button class="nav-btn" onclick="showPage('bulk')">📋 Bulk Upload</button>
       <button class="nav-btn" onclick="showPage('analytics')">📊 Analytics</button>
       <button class="nav-btn" onclick="showPage('settings')">⚙️ Settings</button>
+      <button class="nav-btn" onclick="showPage('pricing')">💲 Manage Pricing</button>
     </div>
     <span id="backendBadge" class="badge badge-offline">⚫ Offline</span>
   </div>
@@ -540,6 +541,44 @@ tr[id^="qr-"] td input{pointer-events:auto;position:relative;z-index:20;}
   </div>
 </div>
 
+<!-- MANAGE PRICING PAGE -->
+<div id="page-pricing" class="page">
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;flex-wrap:wrap;gap:12px;">
+      <div>
+        <h2 style="margin-bottom:4px;">💲 Manage Pricing</h2>
+        <p style="color:#94a3b8;font-size:0.875rem;margin:0;">Edit your prices inline. Changed rows highlight yellow. Click 💾 Push Changes to generate a flat file and open Seller Central.</p>
+      </div>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+        <span id="pricingChangeBadge" style="display:none;background:#f97316;color:#fff;padding:4px 12px;border-radius:12px;font-size:0.8rem;font-weight:700;"></span>
+        <button class="btn btn-sm" style="background:#334155;color:#e2e8f0;" onclick="loadPricingTab()">🔄 Refresh</button>
+        <button class="btn btn-primary" onclick="pushPricingChanges()" id="pushChangesBtn" style="opacity:0.4;cursor:not-allowed;" disabled>💾 Push Changes</button>
+      </div>
+    </div>
+    <div id="pricingAlert" style="margin-bottom:12px;"></div>
+    <div class="table-wrap">
+      <table style="width:100%;border-collapse:collapse;font-size:0.9rem;">
+        <thead>
+          <tr>
+            <th style="width:50px;"></th>
+            <th>Product</th>
+            <th>ASIN / SKU</th>
+            <th style="color:#a78bfa;">Current My Price</th>
+            <th style="color:#f97316;">New Price</th>
+            <th style="color:#ef4444;">Floor (Cost+5%)</th>
+            <th style="color:#10b981;">Buybox Price</th>
+            <th>Buybox Seller</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody id="pricingBody">
+          <tr><td colspan="9"><div class="empty-state"><div class="icon">💲</div><p>Loading products…</p></div></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
 </body>
 <script>
 // Auto-detect API URL: use same host when deployed, fallback to localhost for local dev
@@ -566,6 +605,7 @@ function showPage(name) {
   if (name === 'dashboard') loadDashboard();
   if (name === 'analytics') loadAnalytics();
   if (name === 'settings') loadSettings();
+  if (name === 'pricing') loadPricingTab();
 }
 
 // ── Health Check ─────────────────────────────────────────────────
@@ -2112,6 +2152,173 @@ async function runNow() {
     showAlert('schedulerMsg', '❌ Failed to trigger refresh', 'error');
   }
 }
+
+// ── Manage Pricing Tab ───────────────────────────────────────────────────────
+let pricingProducts = [];         // full product list from API
+let pricingEdits = {};            // { asin: newPrice }  — tracks unsaved changes
+
+function loadPricingTab() {
+  fetch(API + '/api/buybox/tracked')
+    .then(r => r.json())
+    .then(data => {
+      pricingProducts = data.asins || [];
+      pricingEdits = {};
+      renderPricingTable();
+      updatePricingBadge();
+    })
+    .catch(() => showPricingAlert('❌ Failed to load products', 'error'));
+}
+
+function renderPricingTable() {
+  const tbody = document.getElementById('pricingBody');
+  if (!pricingProducts.length) {
+    tbody.innerHTML = '<tr><td colspan="9"><div class="empty-state"><div class="icon">📦</div><p>No products tracked yet.</p></div></td></tr>';
+    return;
+  }
+  const currencySymbol = p => {
+    if (!p.currency) return 'R';
+    const map = { GBP:'£', USD:'$', EUR:'€', AUD:'A$', CAD:'C$', ZAR:'R' };
+    return map[p.currency] || p.currency + ' ';
+  };
+  const fmt = (v, sym) => (v != null && v !== '') ? sym + parseFloat(v).toFixed(2) : '—';
+
+  tbody.innerHTML = pricingProducts.map(p => {
+    const sym = currencySymbol(p);
+    const floor = p.cost_price ? p.cost_price * 1.05 : null;
+    const currentEdit = pricingEdits[p.asin];
+    const isChanged = currentEdit !== undefined;
+    const rowBg = isChanged ? 'background:#2d2500;border-left:3px solid #f97316;' : 'border-left:3px solid transparent;';
+    const bbStatus = p.buybox_status || 'unknown';
+    const statusClass = { winning:'status-winning', losing:'status-losing', amazon:'status-amazon', unknown:'status-unknown' }[bbStatus] || 'status-unknown';
+    const statusLabel = { winning:'🏆 Winning', losing:'😞 Losing', amazon:'🛒 Amazon', unknown:'❓ Unknown' }[bbStatus] || bbStatus;
+    const imgHtml = p.image_url
+      ? `<img src="${p.image_url}" class="product-img" onerror="this.style.display='none'" />`
+      : `<div class="no-img">📦</div>`;
+
+    return `<tr id="prow-${p.asin}" style="${rowBg}">
+      <td>${imgHtml}</td>
+      <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${(p.title||'').replace(/"/g,'&quot;')}">${p.title || '—'}</td>
+      <td><div style="font-family:monospace;font-size:0.8rem;color:#f97316;">${p.asin}</div><div style="font-size:0.75rem;color:#64748b;">${p.sku || '—'}</div></td>
+      <td style="color:#a78bfa;font-weight:700;">${fmt(p.my_price, sym)}</td>
+      <td>
+        <input
+          type="number"
+          step="0.01"
+          min="0"
+          value="${currentEdit !== undefined ? currentEdit : (p.my_price != null ? parseFloat(p.my_price).toFixed(2) : '')}"
+          placeholder="Enter price"
+          style="width:110px;background:#0f172a;border:1px solid ${isChanged ? '#f97316' : '#334155'};color:#e2e8f0;padding:7px 10px;border-radius:6px;font-size:0.9rem;outline:none;"
+          oninput="onPricingInput('${p.asin}', this.value, ${floor || 'null'})"
+          onfocus="this.style.borderColor='#f97316'"
+        />
+      </td>
+      <td style="color:#ef4444;font-size:0.85rem;">${floor ? sym + floor.toFixed(2) : '—'}</td>
+      <td style="color:#10b981;font-weight:700;">${fmt(p.buybox_price, sym)}</td>
+      <td style="color:#94a3b8;font-size:0.85rem;">${p.buybox_seller || '—'}</td>
+      <td><span class="status-badge ${statusClass}">${statusLabel}</span></td>
+    </tr>`;
+  }).join('');
+}
+
+function onPricingInput(asin, rawVal, floor) {
+  const val = rawVal.trim();
+  const product = pricingProducts.find(p => p.asin === asin);
+  const originalPrice = product ? product.my_price : null;
+
+  if (val === '' || val === (originalPrice != null ? parseFloat(originalPrice).toFixed(2) : '')) {
+    // Cleared or reverted — remove from edits
+    delete pricingEdits[asin];
+  } else {
+    const newPrice = parseFloat(val);
+    if (!isNaN(newPrice)) {
+      // Floor price protection warning
+      if (floor !== null && newPrice < floor) {
+        showPricingAlert(`⚠️ Warning: Price for <b>${asin}</b> (${newPrice.toFixed(2)}) is below floor price (${floor.toFixed(2)}). You can still save, but check your margins!`, 'error');
+      } else {
+        // Clear any previous floor warning
+        const alertEl = document.getElementById('pricingAlert');
+        if (alertEl && alertEl.innerHTML.includes(asin)) alertEl.innerHTML = '';
+      }
+      pricingEdits[asin] = newPrice;
+    } else {
+      delete pricingEdits[asin];
+    }
+  }
+
+  // Update row highlight
+  const row = document.getElementById('prow-' + asin);
+  if (row) {
+    const isChanged = pricingEdits[asin] !== undefined;
+    row.style.background = isChanged ? '#2d2500' : '';
+    row.style.borderLeft = isChanged ? '3px solid #f97316' : '3px solid transparent';
+    const input = row.querySelector('input[type=number]');
+    if (input) input.style.borderColor = isChanged ? '#f97316' : '#334155';
+  }
+
+  updatePricingBadge();
+}
+
+function updatePricingBadge() {
+  const count = Object.keys(pricingEdits).length;
+  const badge = document.getElementById('pricingChangeBadge');
+  const btn = document.getElementById('pushChangesBtn');
+  if (count > 0) {
+    badge.style.display = 'inline-block';
+    badge.textContent = count + ' change' + (count > 1 ? 's' : '') + ' pending';
+    btn.disabled = false;
+    btn.style.opacity = '1';
+    btn.style.cursor = 'pointer';
+  } else {
+    badge.style.display = 'none';
+    btn.disabled = true;
+    btn.style.opacity = '0.4';
+    btn.style.cursor = 'not-allowed';
+  }
+}
+
+function pushPricingChanges() {
+  const edits = Object.entries(pricingEdits);
+  if (!edits.length) return;
+
+  // Build flat file content (tab-separated: sku, price, min-price, max-price, currency)
+  // Format: Seller Central Inventory Loader price & quantity template
+  const lines = ['sku\tprice\tminimum-seller-allowed-price\tmaximum-seller-allowed-price\tcurrency'];
+  edits.forEach(([asin, newPrice]) => {
+    const product = pricingProducts.find(p => p.asin === asin);
+    const sku = (product && product.sku) ? product.sku : asin;
+    const currency = (product && product.currency) ? product.currency : 'ZAR';
+    lines.push(`${sku}\t${newPrice.toFixed(2)}\t\t\t${currency}`);
+  });
+
+  const content = lines.join('\n');
+  const blob = new Blob([content], { type: 'text/tab-separated-values' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  a.href = url;
+  a.download = `price-update-${timestamp}.txt`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+
+  // Open Seller Central Manage Pricing page
+  setTimeout(() => {
+    window.open('https://sellercentral.amazon.co.za/inventory?ref=fbacentral_nav_fba', '_blank');
+  }, 500);
+
+  showPricingAlert(`✅ Price file downloaded with ${edits.length} product(s). Seller Central is opening — upload the file via Inventory → Upload products & inventory.`, 'success');
+}
+
+function showPricingAlert(msg, type) {
+  const el = document.getElementById('pricingAlert');
+  if (!el) return;
+  const cls = type === 'success' ? 'alert-success' : type === 'error' ? 'alert-error' : 'alert-info';
+  el.innerHTML = `<div class="alert ${cls}">${msg}</div>`;
+  if (type === 'success') setTimeout(() => { if (el) el.innerHTML = ''; }, 6000);
+}
+
+// ── End Manage Pricing ────────────────────────────────────────────────────────
 
 // ── Init ──────────────────────────────────────────────────────────
 checkHealth();
