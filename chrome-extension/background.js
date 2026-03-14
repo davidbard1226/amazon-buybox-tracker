@@ -653,19 +653,6 @@ async function sellerCentralAutoUpload() {
 
   setTimeout(() => banner.remove(), 20000);
 }
-      banner.innerHTML = '✅ Buybox Tracker: Price file uploaded! Amazon will update prices within 15-30 minutes.';
-      // Clear pending upload
-      chrome.storage.local.remove(['pendingUploadContent', 'pendingUploadName', 'pendingUploadTimestamp']);
-    } else {
-      banner.innerHTML = '🤖 Buybox Tracker: File attached ✅ — please click <b>Upload</b> to submit.';
-    }
-  } else {
-    banner.style.background = '#ef4444';
-    banner.innerHTML = '❌ Buybox Tracker: Could not attach file automatically. Please upload manually.';
-  }
-
-  setTimeout(() => banner.remove(), 15000);
-}
 
 // ─── Bulk ASIN handler ────────────────────────────────────────────────────────
 async function handleBulkASINs(asins, marketplace) {
