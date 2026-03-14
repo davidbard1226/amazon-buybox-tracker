@@ -49,6 +49,14 @@
       ],
       "js": ["content.js"],
       "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://amazon-buybox-tracker.onrender.com/*",
+        "https://*.onrender.com/*"
+      ],
+      "js": ["dashboard-bridge.js"],
+      "run_at": "document_idle"
     }
   ],
   "action": {

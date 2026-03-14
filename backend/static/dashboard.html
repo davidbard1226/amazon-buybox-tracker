@@ -557,6 +557,16 @@ tr[id^="qr-"] td input{pointer-events:auto;position:relative;z-index:20;}
       </div>
     </div>
     <div id="pricingAlert" style="margin-bottom:12px;"></div>
+
+    <!-- Extension ID setup strip -->
+    <div id="extIdStrip" style="background:#1a1a2e;border:1px solid #334155;border-radius:8px;padding:12px 16px;margin-bottom:14px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-size:0.85rem;">
+      <span style="color:#94a3b8;">🔌 Extension ID:</span>
+      <input type="text" id="extIdInput" placeholder="Paste Chrome Extension ID here (e.g. abcdefghijklmnop...)"
+        style="flex:1;min-width:280px;background:#0f172a;border:1px solid #334155;color:#e2e8f0;padding:6px 10px;border-radius:6px;font-size:0.8rem;font-family:monospace;outline:none;"
+        oninput="onExtIdInput(this.value)" />
+      <span id="extIdStatusDot" style="font-size:0.8rem;color:#64748b;">Not set — auto-upload disabled</span>
+      <a href="#" onclick="openExtensionsPage()" style="color:#f97316;font-size:0.8rem;text-decoration:none;">📋 How to find ID</a>
+    </div>
     <div class="table-wrap">
       <table style="width:100%;border-collapse:collapse;font-size:0.9rem;">
         <thead>
@@ -2154,11 +2164,90 @@ async function runNow() {
   }
 }
 
+// Listen for extension bridge event (fires when extension injects its ID)
+window.addEventListener('buyboxExtensionReady', (e) => {
+  if (e.detail && e.detail.extId) {
+    setExtensionId(e.detail.extId);
+    updateExtIdStrip();
+    console.log('✅ Extension auto-linked via bridge:', e.detail.extId);
+  }
+});
+
+// ── Chrome Extension Bridge ──────────────────────────────────────────────────
+// Extension ID is stored by the extension itself via a tiny beacon fetch,
+// or the user can paste it in Settings. We read it from localStorage.
+let _extensionId = localStorage.getItem('extensionId') || '';
+
+function getExtensionId() { return _extensionId; }
+
+function setExtensionId(id) {
+  _extensionId = (id || '').trim();
+  localStorage.setItem('extensionId', _extensionId);
+}
+
+// Called by extension's content script on dashboard pages via URL param
+(function detectExtensionId() {
+  const url = new URL(window.location.href);
+  const extId = url.searchParams.get('ext_id');
+  if (extId && extId.length > 10) {
+    setExtensionId(extId);
+    console.log('✅ Extension ID captured:', extId);
+    // Clean the URL
+    url.searchParams.delete('ext_id');
+    history.replaceState({}, '', url.toString());
+  }
+})();
+
+async function sendToExtension(action, payload) {
+  const id = getExtensionId();
+  if (!id) throw new Error('NO_EXT_ID');
+  return new Promise((resolve, reject) => {
+    try {
+      chrome.runtime.sendMessage(id, { action, ...payload }, (response) => {
+        if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
+        if (!response) return reject(new Error('No response from extension'));
+        resolve(response);
+      });
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+
 // ── Manage Pricing Tab ───────────────────────────────────────────────────────
 let pricingProducts = [];         // full product list from API
 let pricingEdits = {};            // { asin: newPrice }  — tracks unsaved changes
 
+function onExtIdInput(val) {
+  setExtensionId(val);
+  updateExtIdStrip();
+}
+
+function updateExtIdStrip() {
+  const id = getExtensionId();
+  const input = document.getElementById('extIdInput');
+  const dot   = document.getElementById('extIdStatusDot');
+  if (!input || !dot) return;
+  input.value = id;
+  if (id && id.length >= 32) {
+    dot.style.color = '#10b981';
+    dot.textContent = '✅ Extension linked — auto-upload enabled';
+  } else if (id) {
+    dot.style.color = '#f59e0b';
+    dot.textContent = '⚠️ ID looks short — check it';
+  } else {
+    dot.style.color = '#64748b';
+    dot.textContent = 'Not set — will download flat file instead';
+  }
+}
+
+function openExtensionsPage() {
+  window.open('chrome://extensions', '_blank');
+  showPricingAlert('ℹ️ In the Extensions page, turn on <b>Developer mode</b> (top right), then copy the ID shown under "Amazon Buybox Tracker" and paste it in the box above.', 'info');
+}
+
 function loadPricingTab() {
+  updateExtIdStrip();
   fetch(API + '/api/buybox/tracked')
     .then(r => r.json())
     .then(data => {
@@ -2307,82 +2396,97 @@ async function pushPricingChanges() {
   btn.disabled = true;
   btn.textContent = '⏳ Pushing…';
 
-  // Build payload
-  const items = edits.map(([asin, newPrice]) => {
-    const product = pricingProducts.find(p => p.asin === asin);
-    return {
-      sku:      (product && product.sku)      ? product.sku      : asin,
-      price:    newPrice,
-      asin:     asin,
-      currency: (product && product.currency) ? product.currency : 'ZAR'
-    };
-  });
-
-  // Try SP-API bulk push first
-  try {
-    const resp = await fetch(API + '/api/amazon/push-price-bulk', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ items })
-    });
-    const data = await resp.json();
-
-    if (resp.ok) {
-      const ok = data.ok_count || 0;
-      const fail = data.total - ok;
-      let msg = `✅ <b>${ok} price(s) pushed live to Amazon</b> via SP-API.`;
-      if (fail > 0) {
-        const failDetails = data.results.filter(r => !r.ok).map(r => `${r.sku}: ${r.message}`).join(', ');
-        msg += ` ⚠️ ${fail} failed: ${failDetails}. <a href="#" onclick="fallbackDownloadPriceFile()" style="color:#f97316;">Download flat file for failed items</a>`;
-      }
-      showPricingAlert(msg, 'success');
-      // Clear only the successfully pushed edits
-      data.results.filter(r => r.ok).forEach(r => { delete pricingEdits[r.asin]; });
-      renderPricingTable();
-      updatePricingBadge();
-      // Refresh product list after short delay
-      setTimeout(loadPricingTab, 3000);
-      return;
-    }
-
-    // SP-API responded but with error (e.g. 503 = not configured) — fall through to flat file
-    if (resp.status === 503) {
-      fallbackDownloadPriceFile();
-      return;
-    }
-
-    showPricingAlert('❌ SP-API error: ' + (data.detail || JSON.stringify(data)), 'error');
-  } catch (e) {
-    // Network error or SP-API not available — fall back to flat file
-    fallbackDownloadPriceFile();
-  } finally {
-    btn.disabled = false;
-    btn.textContent = '💾 Push Changes';
-    updatePricingBadge();
-  }
-}
-
-function fallbackDownloadPriceFile() {
-  const edits = Object.entries(pricingEdits);
-  if (!edits.length) return;
+  // Build the flat file content
   const lines = ['sku\tprice\tminimum-seller-allowed-price\tmaximum-seller-allowed-price\tcurrency'];
   edits.forEach(([asin, newPrice]) => {
-    const product = pricingProducts.find(p => p.asin === asin);
-    const sku = (product && product.sku) ? product.sku : asin;
-    const currency = (product && product.currency) ? product.currency : 'ZAR';
+    const p = pricingProducts.find(x => x.asin === asin);
+    const sku      = (p && p.sku)      ? p.sku      : asin;
+    const currency = (p && p.currency) ? p.currency : 'ZAR';
     lines.push(`${sku}\t${newPrice.toFixed(2)}\t\t\t${currency}`);
   });
-  const blob = new Blob([lines.join('\n')], { type: 'text/tab-separated-values' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `price-update-${new Date().toISOString().slice(0,19).replace(/[:.]/g,'-')}.txt`;
-  document.body.appendChild(a);
-  a.click();
+  const fileContent = lines.join('\n');
+  const fileName    = `price-update-${new Date().toISOString().slice(0,19).replace(/[:.]/g,'-')}.txt`;
+
+  // ── Try 1: SP-API (instant, no extension needed) ──────────────────────────
+  const items = edits.map(([asin, newPrice]) => {
+    const p = pricingProducts.find(x => x.asin === asin);
+    return { sku: (p && p.sku) ? p.sku : asin, price: newPrice, asin, currency: (p && p.currency) ? p.currency : 'ZAR' };
+  });
+  try {
+    const resp = await fetch(API + '/api/amazon/push-price-bulk', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ items }) });
+    if (resp.ok) {
+      const data = await resp.json();
+      const ok = data.ok_count || 0;
+      const fail = data.total - ok;
+      if (ok > 0) {
+        data.results.filter(r => r.ok).forEach(r => { delete pricingEdits[r.asin]; });
+        renderPricingTable();
+        updatePricingBadge();
+        showPricingAlert(`✅ <b>${ok} price(s) pushed live to Amazon</b> via SP-API instantly!` +
+          (fail > 0 ? ` ⚠️ ${fail} failed — trying extension for those...` : ''), 'success');
+        if (fail === 0) { btn.disabled = false; btn.textContent = '💾 Push Changes'; setTimeout(loadPricingTab, 3000); return; }
+      }
+    } else if (resp.status !== 503) {
+      // Unexpected error — skip to extension
+    }
+  } catch (_) { /* SP-API not reachable, continue */ }
+
+  // ── Try 2: Chrome Extension auto-upload ───────────────────────────────────
+  const extId = getExtensionId();
+  if (extId && typeof chrome !== 'undefined' && chrome.runtime) {
+    showPricingAlert('🔄 Sending to Chrome Extension for auto-upload to Seller Central…', 'info');
+    try {
+      const result = await sendToExtension('autoUploadPriceFile', {
+        content:   fileContent,
+        fileName:  fileName,
+        skuCount:  edits.length
+      });
+      if (result && result.success) {
+        showPricingAlert(`✅ <b>Extension is auto-uploading to Seller Central now!</b> A Seller Central tab has opened — watch the orange banner for progress. Prices go live in 15–30 min.`, 'success');
+        btn.disabled = false;
+        btn.textContent = '💾 Push Changes';
+        updatePricingBadge();
+        return;
+      }
+    } catch (e) {
+      if (e.message === 'NO_EXT_ID') {
+        showPricingAlert('⚠️ Extension ID not detected. <b>Paste your Extension ID in the box below</b>, or use the flat file download below.', 'error');
+      } else {
+        console.warn('Extension send failed:', e.message);
+      }
+    }
+  }
+
+  // ── Try 3: Flat file fallback ─────────────────────────────────────────────
+  fallbackDownloadPriceFile(fileContent, fileName);
+
+  btn.disabled = false;
+  btn.textContent = '💾 Push Changes';
+  updatePricingBadge();
+}
+
+function fallbackDownloadPriceFile(fileContent, fileName) {
+  // Accept pre-built content or rebuild from current edits
+  if (!fileContent) {
+    const edits = Object.entries(pricingEdits);
+    if (!edits.length) return;
+    const lines = ['sku\tprice\tminimum-seller-allowed-price\tmaximum-seller-allowed-price\tcurrency'];
+    edits.forEach(([asin, newPrice]) => {
+      const p = pricingProducts.find(x => x.asin === asin);
+      lines.push(`${(p && p.sku) ? p.sku : asin}\t${newPrice.toFixed(2)}\t\t\t${(p && p.currency) ? p.currency : 'ZAR'}`);
+    });
+    fileContent = lines.join('\n');
+    fileName = `price-update-${new Date().toISOString().slice(0,19).replace(/[:.]/g,'-')}.txt`;
+  }
+  const blob = new Blob([fileContent], { type: 'text/tab-separated-values' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href = url; a.download = fileName;
+  document.body.appendChild(a); a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
-  setTimeout(() => window.open('https://sellercentral.amazon.co.za/inventory?ref=fbacentral_nav_fba', '_blank'), 400);
-  showPricingAlert('📥 SP-API not configured — flat file downloaded. Upload it in Seller Central → Inventory → Upload products & inventory.', 'info');
+  setTimeout(() => window.open('https://sellercentral.amazon.co.za/product-search/bulk', '_blank'), 400);
+  showPricingAlert('📥 <b>Flat file downloaded</b> — Seller Central is opening. Upload the file via the Spreadsheet tab → Choose File → Submit products.', 'info');
 }
 
 function showPricingAlert(msg, type) {
