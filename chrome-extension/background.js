@@ -505,7 +505,6 @@ async function scrapeAsinInTab(asin, marketplace) {
 
 // ─── Auto-upload price file to Seller Central ────────────────────────────────
 async function handleAutoUpload(content, fileName, skuCount) {
-  // Save to local storage so the injected script can read it
   await chrome.storage.local.set({
     pendingUploadContent: content,
     pendingUploadName: fileName || 'amazon_reprice.txt',
@@ -513,6 +512,7 @@ async function handleAutoUpload(content, fileName, skuCount) {
   });
 
   return new Promise((resolve, reject) => {
+    // Open tab ACTIVE so user can see it
     chrome.tabs.create({
       url: 'https://sellercentral.amazon.co.za/product-search/bulk',
       active: true
@@ -520,26 +520,23 @@ async function handleAutoUpload(content, fileName, skuCount) {
       const onUpdated = (tabId, info) => {
         if (tabId !== tab.id || info.status !== 'complete') return;
         chrome.tabs.onUpdated.removeListener(onUpdated);
-
-        // Wait 3s for page JS to fully render then inject
+        // Wait 4s for page to fully render
         setTimeout(async () => {
           try {
             await chrome.scripting.executeScript({
               target: { tabId: tab.id },
               func: sellerCentralAutoUpload
             });
-            resolve({ tabId: tab.id, message: 'Upload script injected' });
+            resolve({ tabId: tab.id });
           } catch (err) {
-            reject(new Error('Failed to inject upload script: ' + err.message));
+            reject(new Error('Script inject failed: ' + err.message));
           }
-        }, 3000);
+        }, 4000);
       };
       chrome.tabs.onUpdated.addListener(onUpdated);
-
-      // Timeout after 30s
       setTimeout(() => {
         chrome.tabs.onUpdated.removeListener(onUpdated);
-        resolve({ message: 'Tab opened — upload manually if needed' });
+        resolve({ message: 'Timeout — tab opened' });
       }, 30000);
     });
   });
@@ -554,11 +551,92 @@ async function sellerCentralAutoUpload() {
   const fileName = stored.pendingUploadName || 'amazon_reprice.txt';
   const wait     = ms => new Promise(r => setTimeout(r, ms));
 
-  // Show banner
+  // Big visible banner at top of page
   const banner = document.createElement('div');
-  banner.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#f97316;color:#fff;padding:14px 20px;font-size:14px;font-weight:bold;z-index:99999;text-align:center;';
-  banner.innerHTML = '🤖 Buybox Tracker: Attaching price file...';
+  banner.style.cssText = `
+    position:fixed;top:0;left:0;right:0;
+    background:#f97316;color:#fff;
+    padding:18px 24px;font-size:16px;font-weight:bold;
+    z-index:99999;text-align:center;
+    box-shadow:0 4px 12px rgba(0,0,0,0.4);
+    font-family:Arial,sans-serif;
+  `;
+  const setStatus = (msg, color) => {
+    banner.style.background = color || '#f97316';
+    banner.innerHTML = '🤖 Buybox Tracker Auto-Upload: ' + msg;
+    console.log('🤖', msg);
+  };
+
   document.body.prepend(banner);
+  setStatus('Step 1 — Making sure Spreadsheet tab is selected...');
+
+  // Step 1: Click Spreadsheet tab if not already selected
+  await wait(500);
+  const tabs = document.querySelectorAll('button, a, span, div');
+  for (const el of tabs) {
+    if (el.textContent.trim() === 'Spreadsheet' && el.offsetParent !== null) {
+      el.click();
+      break;
+    }
+  }
+  await wait(1500);
+
+  // Step 2: Find and attach the file
+  setStatus('Step 2 — Attaching price file...');
+  await wait(500);
+
+  // Find the file input — it's hidden inside shadow DOM of kat-button#select-file
+  let fileInput = null;
+  // Check regular inputs first (skip image input)
+  for (const inp of document.querySelectorAll('input[type="file"]')) {
+    if (inp.id !== 'imageFileInput') { fileInput = inp; break; }
+  }
+  // If not found, look inside shadow roots
+  if (!fileInput) {
+    for (const el of document.querySelectorAll('*')) {
+      if (el.shadowRoot) {
+        const inp = el.shadowRoot.querySelector('input[type="file"]');
+        if (inp && inp.id !== 'imageFileInput') { fileInput = inp; break; }
+      }
+    }
+  }
+
+  if (!fileInput) {
+    setStatus('❌ Could not find file input. Please attach the file manually.', '#ef4444');
+    return;
+  }
+
+  const blob = new Blob([content], { type: 'text/plain' });
+  const file = new File([blob], fileName, { type: 'text/plain' });
+  const dt   = new DataTransfer();
+  dt.items.add(file);
+  fileInput.files = dt.files;
+  fileInput.dispatchEvent(new Event('change', { bubbles: true }));
+  fileInput.dispatchEvent(new Event('input',  { bubbles: true }));
+
+  setStatus(`Step 3 — File "${fileName}" attached. Waiting for Amazon to process...`);
+  await wait(4000); // Give Amazon time to detect file and enable Submit button
+
+  // Step 4: Click Submit products button
+  setStatus('Step 4 — Clicking Submit products...');
+  let submitted = false;
+  for (const btn of document.querySelectorAll('button')) {
+    if (/submit products/i.test(btn.textContent) && !btn.disabled) {
+      btn.click();
+      submitted = true;
+      break;
+    }
+  }
+
+  if (submitted) {
+    setStatus('✅ Done! Price file submitted. Amazon updates prices in 15-30 minutes.', '#10b981');
+    chrome.storage.local.remove(['pendingUploadContent', 'pendingUploadName', 'pendingUploadTimestamp']);
+  } else {
+    setStatus('⚠️ File attached — Submit button not ready yet. Click "Submit products" to finish.', '#d97706');
+  }
+
+  setTimeout(() => banner.remove(), 30000);
+}
 
   // Pierce shadow DOM to find file input inside kat-button#select-file
   const findFileInput = () => {
