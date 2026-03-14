@@ -1487,6 +1487,41 @@ async def sync_myprices_from_gsheet(db: Session = Depends(get_db)):
     }
 
 
+# ── Push all products to Google Sheet (2-way sync) ──────────────────────────
+GSHEET_WEBAPP_URL = os.getenv("GSHEET_WEBAPP_URL", "")
+
+@app.post("/api/costs/push-to-sheet")
+async def push_to_sheet(db: Session = Depends(get_db)):
+    """Push all tracked products to Google Sheet via Apps Script Web App."""
+    if not GSHEET_WEBAPP_URL:
+        raise HTTPException(status_code=400, detail="GSHEET_WEBAPP_URL env var not set. Deploy Apps Script as Web App and add the URL to Render env vars.")
+
+    products = get_all_asins(db)
+    payload  = [
+        {
+            "sku":           p.sku,
+            "asin":          p.asin,
+            "title":         p.title,
+            "my_price":      float(p.my_price)    if p.my_price    else None,
+            "cost_price":    float(p.cost_price)  if p.cost_price  else None,
+            "buybox_price":  float(p.buybox_price) if p.buybox_price else None,
+            "buybox_seller": p.buybox_seller,
+            "buybox_status": p.buybox_status,
+            "cost_supplier": p.cost_supplier,
+            "my_stock":      p.my_stock,
+            "scraped_at":    p.scraped_at.isoformat() if p.scraped_at else None,
+        }
+        for p in products
+    ]
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.post(GSHEET_WEBAPP_URL, json={"products": payload})
+        result = resp.json()
+        return {"ok": True, "updated": result.get("updated", 0), "added": result.get("added", 0), "total": len(payload)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Sheet push failed: {str(e)}")
+
+
 class CostUpdateRequest(BaseModel):
     asin: str
     cost_price: float
@@ -1582,6 +1617,43 @@ def api_push_price(req: PushPriceRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail=result.get("message", "Push failed"))
 
     return result
+
+
+class BulkPushPriceRequest(BaseModel):
+    items: List[dict]  # [{sku, price, asin, currency}]
+
+@app.post("/api/amazon/push-price-bulk")
+def api_push_price_bulk(req: BulkPushPriceRequest, db: Session = Depends(get_db)):
+    """Push multiple price changes to Amazon via SP-API in one call."""
+    if not SP_API_AVAILABLE:
+        raise HTTPException(status_code=503, detail="SP-API client not available")
+    if not req.items:
+        raise HTTPException(status_code=400, detail="No items provided")
+    results = []
+    for item in req.items:
+        sku = (item.get("sku") or "").strip()
+        price = item.get("price")
+        asin = (item.get("asin") or "").strip().upper()
+        currency = item.get("currency") or "ZAR"
+        if not sku or not price or float(price) <= 0:
+            results.append({"ok": False, "sku": sku, "asin": asin, "message": "Invalid SKU or price"})
+            continue
+        result = push_price(sku=sku, new_price=float(price), currency=currency)
+        result["asin"] = asin
+        if result.get("ok") and asin:
+            try:
+                save_price_history(db, {
+                    "asin": asin,
+                    "marketplace": "amazon.co.za",
+                    "buybox_price": float(price),
+                    "buybox_seller": "Bonolo Online (pushed)",
+                    "buybox_status": "pushed",
+                })
+            except Exception:
+                pass
+        results.append(result)
+    ok_count = sum(1 for r in results if r.get("ok"))
+    return {"results": results, "ok_count": ok_count, "total": len(results)}
 
 
 @app.get("/api/amazon/check-credentials")

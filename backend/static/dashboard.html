@@ -547,9 +547,10 @@ tr[id^="qr-"] td input{pointer-events:auto;position:relative;z-index:20;}
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;flex-wrap:wrap;gap:12px;">
       <div>
         <h2 style="margin-bottom:4px;">💲 Manage Pricing</h2>
-        <p style="color:#94a3b8;font-size:0.875rem;margin:0;">Edit your prices inline. Changed rows highlight yellow. Click 💾 Push Changes to generate a flat file and open Seller Central.</p>
+        <p style="color:#94a3b8;font-size:0.875rem;margin:0;">Edit your prices inline. Changed rows highlight yellow. Click 💾 Push Changes to update prices <b>live on Amazon</b> via SP-API (or download flat file if SP-API is not configured).</p>
       </div>
       <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+        <span id="spApiStatusBadge" style="font-size:0.75rem;padding:3px 10px;border-radius:10px;background:#334155;color:#94a3b8;">SP-API: checking…</span>
         <span id="pricingChangeBadge" style="display:none;background:#f97316;color:#fff;padding:4px 12px;border-radius:12px;font-size:0.8rem;font-weight:700;"></span>
         <button class="btn btn-sm" style="background:#334155;color:#e2e8f0;" onclick="loadPricingTab()">🔄 Refresh</button>
         <button class="btn btn-primary" onclick="pushPricingChanges()" id="pushChangesBtn" style="opacity:0.4;cursor:not-allowed;" disabled>💾 Push Changes</button>
@@ -2167,6 +2168,28 @@ function loadPricingTab() {
       updatePricingBadge();
     })
     .catch(() => showPricingAlert('❌ Failed to load products', 'error'));
+  // Check SP-API credentials status
+  fetch(API + '/api/amazon/check-credentials')
+    .then(r => r.json())
+    .then(d => {
+      const badge = document.getElementById('spApiStatusBadge');
+      if (!badge) return;
+      if (d.ok) {
+        badge.style.background = 'rgba(16,185,129,0.15)';
+        badge.style.color = '#10b981';
+        badge.style.border = '1px solid rgba(16,185,129,0.3)';
+        badge.textContent = '✅ SP-API: Live push active';
+      } else {
+        badge.style.background = 'rgba(239,68,68,0.1)';
+        badge.style.color = '#ef4444';
+        badge.style.border = '1px solid rgba(239,68,68,0.3)';
+        badge.textContent = '⚠️ SP-API: Not configured (flat file mode)';
+      }
+    })
+    .catch(() => {
+      const badge = document.getElementById('spApiStatusBadge');
+      if (badge) { badge.textContent = '⚠️ SP-API: Unknown'; }
+    });
 }
 
 function renderPricingTable() {
@@ -2276,12 +2299,72 @@ function updatePricingBadge() {
   }
 }
 
-function pushPricingChanges() {
+async function pushPricingChanges() {
   const edits = Object.entries(pricingEdits);
   if (!edits.length) return;
 
-  // Build flat file content (tab-separated: sku, price, min-price, max-price, currency)
-  // Format: Seller Central Inventory Loader price & quantity template
+  const btn = document.getElementById('pushChangesBtn');
+  btn.disabled = true;
+  btn.textContent = '⏳ Pushing…';
+
+  // Build payload
+  const items = edits.map(([asin, newPrice]) => {
+    const product = pricingProducts.find(p => p.asin === asin);
+    return {
+      sku:      (product && product.sku)      ? product.sku      : asin,
+      price:    newPrice,
+      asin:     asin,
+      currency: (product && product.currency) ? product.currency : 'ZAR'
+    };
+  });
+
+  // Try SP-API bulk push first
+  try {
+    const resp = await fetch(API + '/api/amazon/push-price-bulk', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items })
+    });
+    const data = await resp.json();
+
+    if (resp.ok) {
+      const ok = data.ok_count || 0;
+      const fail = data.total - ok;
+      let msg = `✅ <b>${ok} price(s) pushed live to Amazon</b> via SP-API.`;
+      if (fail > 0) {
+        const failDetails = data.results.filter(r => !r.ok).map(r => `${r.sku}: ${r.message}`).join(', ');
+        msg += ` ⚠️ ${fail} failed: ${failDetails}. <a href="#" onclick="fallbackDownloadPriceFile()" style="color:#f97316;">Download flat file for failed items</a>`;
+      }
+      showPricingAlert(msg, 'success');
+      // Clear only the successfully pushed edits
+      data.results.filter(r => r.ok).forEach(r => { delete pricingEdits[r.asin]; });
+      renderPricingTable();
+      updatePricingBadge();
+      // Refresh product list after short delay
+      setTimeout(loadPricingTab, 3000);
+      return;
+    }
+
+    // SP-API responded but with error (e.g. 503 = not configured) — fall through to flat file
+    if (resp.status === 503) {
+      fallbackDownloadPriceFile();
+      return;
+    }
+
+    showPricingAlert('❌ SP-API error: ' + (data.detail || JSON.stringify(data)), 'error');
+  } catch (e) {
+    // Network error or SP-API not available — fall back to flat file
+    fallbackDownloadPriceFile();
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '💾 Push Changes';
+    updatePricingBadge();
+  }
+}
+
+function fallbackDownloadPriceFile() {
+  const edits = Object.entries(pricingEdits);
+  if (!edits.length) return;
   const lines = ['sku\tprice\tminimum-seller-allowed-price\tmaximum-seller-allowed-price\tcurrency'];
   edits.forEach(([asin, newPrice]) => {
     const product = pricingProducts.find(p => p.asin === asin);
@@ -2289,25 +2372,17 @@ function pushPricingChanges() {
     const currency = (product && product.currency) ? product.currency : 'ZAR';
     lines.push(`${sku}\t${newPrice.toFixed(2)}\t\t\t${currency}`);
   });
-
-  const content = lines.join('\n');
-  const blob = new Blob([content], { type: 'text/tab-separated-values' });
+  const blob = new Blob([lines.join('\n')], { type: 'text/tab-separated-values' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
-  const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
   a.href = url;
-  a.download = `price-update-${timestamp}.txt`;
+  a.download = `price-update-${new Date().toISOString().slice(0,19).replace(/[:.]/g,'-')}.txt`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
-
-  // Open Seller Central Manage Pricing page
-  setTimeout(() => {
-    window.open('https://sellercentral.amazon.co.za/inventory?ref=fbacentral_nav_fba', '_blank');
-  }, 500);
-
-  showPricingAlert(`✅ Price file downloaded with ${edits.length} product(s). Seller Central is opening — upload the file via Inventory → Upload products & inventory.`, 'success');
+  setTimeout(() => window.open('https://sellercentral.amazon.co.za/inventory?ref=fbacentral_nav_fba', '_blank'), 400);
+  showPricingAlert('📥 SP-API not configured — flat file downloaded. Upload it in Seller Central → Inventory → Upload products & inventory.', 'info');
 }
 
 function showPricingAlert(msg, type) {
