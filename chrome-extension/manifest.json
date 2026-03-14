@@ -22,7 +22,8 @@
     "https://*.amazon.co.za/*",
     "https://*.onrender.com/*",
     "https://sellercentral.amazon.co.za/*",
-    "https://sellercentral.amazon.com/*"
+    "https://sellercentral.amazon.com/*",
+    "https://sellercentral.amazon.co.uk/*"
   ],
   "externally_connectable": {
     "matches": [

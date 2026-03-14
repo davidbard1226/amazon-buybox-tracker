@@ -511,16 +511,15 @@ async function handleAutoUpload(content, fileName, skuCount) {
     pendingUploadTimestamp: Date.now()
   });
 
+  // Correct URL: Inventory > Upload products & inventory (price & quantity feed)
+  const uploadUrl = 'https://sellercentral.amazon.co.za/listing/upload?ref_=xx_upload_tnav_upload';
+
   return new Promise((resolve, reject) => {
-    // Open tab ACTIVE so user can see it
-    chrome.tabs.create({
-      url: 'https://sellercentral.amazon.co.za/product-search/bulk',
-      active: true
-    }, (tab) => {
+    chrome.tabs.create({ url: uploadUrl, active: true }, (tab) => {
       const onUpdated = (tabId, info) => {
         if (tabId !== tab.id || info.status !== 'complete') return;
         chrome.tabs.onUpdated.removeListener(onUpdated);
-        // Wait 4s for page to fully render
+        // Wait 5s for React/Angular page to fully render all components
         setTimeout(async () => {
           try {
             await chrome.scripting.executeScript({
@@ -531,7 +530,7 @@ async function handleAutoUpload(content, fileName, skuCount) {
           } catch (err) {
             reject(new Error('Script inject failed: ' + err.message));
           }
-        }, 4000);
+        }, 5000);
       };
       chrome.tabs.onUpdated.addListener(onUpdated);
       setTimeout(() => {
@@ -542,7 +541,7 @@ async function handleAutoUpload(content, fileName, skuCount) {
   });
 }
 
-// Injected into Seller Central upload page — handles the full upload flow
+// Injected into Seller Central /listing/upload page — handles the full upload flow
 async function sellerCentralAutoUpload() {
   const stored = await chrome.storage.local.get(['pendingUploadContent', 'pendingUploadName']);
   if (!stored.pendingUploadContent) { console.warn('No pending upload found'); return; }
@@ -551,133 +550,125 @@ async function sellerCentralAutoUpload() {
   const fileName = stored.pendingUploadName || 'amazon_reprice.txt';
   const wait     = ms => new Promise(r => setTimeout(r, ms));
 
-  // Big visible banner at top of page
+  // Status banner
   const banner = document.createElement('div');
-  banner.style.cssText = `
-    position:fixed;top:0;left:0;right:0;
-    background:#f97316;color:#fff;
-    padding:18px 24px;font-size:16px;font-weight:bold;
-    z-index:99999;text-align:center;
-    box-shadow:0 4px 12px rgba(0,0,0,0.4);
-    font-family:Arial,sans-serif;
-  `;
+  banner.id = 'buyboxUploaderBanner';
+  banner.style.cssText = [
+    'position:fixed', 'top:0', 'left:0', 'right:0',
+    'background:#f97316', 'color:#fff',
+    'padding:16px 24px', 'font-size:15px', 'font-weight:bold',
+    'z-index:99999', 'text-align:center',
+    'box-shadow:0 4px 12px rgba(0,0,0,0.4)',
+    'font-family:Arial,sans-serif', 'line-height:1.4'
+  ].join(';');
+
   const setStatus = (msg, color) => {
     banner.style.background = color || '#f97316';
-    banner.innerHTML = '🤖 Buybox Tracker Auto-Upload: ' + msg;
-    console.log('🤖', msg);
+    banner.innerHTML = '🤖 Buybox Tracker: ' + msg;
+    console.log('🤖 AutoUpload:', msg);
   };
 
   document.body.prepend(banner);
-  setStatus('Step 1 — Making sure Spreadsheet tab is selected...');
+  setStatus('Starting auto-upload…');
+  await wait(1000);
 
-  // Step 1: Click Spreadsheet tab if not already selected
-  await wait(500);
-  const tabs = document.querySelectorAll('button, a, span, div');
-  for (const el of tabs) {
-    if (el.textContent.trim() === 'Spreadsheet' && el.offsetParent !== null) {
-      el.click();
-      break;
-    }
-  }
-  await wait(1500);
-
-  // Step 2: Find and attach the file
-  setStatus('Step 2 — Attaching price file...');
-  await wait(500);
-
+  // ── Step 1: Build the File object from stored content ──────────────────────
   const blob = new Blob([content], { type: 'text/plain' });
-  const file = new File([blob], fileName, { type: 'text/plain' });
+  const file = new File([blob], fileName, { type: 'text/plain', lastModified: Date.now() });
   const dt   = new DataTransfer();
   dt.items.add(file);
 
-  // Find the drop zone — the visible dashed box on the page
-  const dropZone = document.querySelector(
-    '.file-upload-area, [class*="file-upload-area"], [class*="dropzone"], ' +
-    '[class*="drop-zone"], [class*="upload-area"], [class*="file-upload"]'
-  );
+  // ── Step 2: Find the hidden file input and set its files ───────────────────
+  // The /listing/upload page has a real <input type="file"> behind the "Upload file" button
+  setStatus('Step 1 — Finding file input…');
+  await wait(500);
 
-  let attached = false;
+  let fileInput = null;
 
-  if (dropZone) {
-    // Dispatch drag events on the drop zone
-    dropZone.dispatchEvent(new DragEvent('dragenter', { bubbles: true, cancelable: true, dataTransfer: dt }));
-    await wait(200);
-    dropZone.dispatchEvent(new DragEvent('dragover',  { bubbles: true, cancelable: true, dataTransfer: dt }));
-    await wait(200);
-    dropZone.dispatchEvent(new DragEvent('drop',      { bubbles: true, cancelable: true, dataTransfer: dt }));
-    await wait(1000);
-    attached = true;
-    setStatus(`Step 2 — Dropped file onto upload area...`);
+  // Method A: direct query
+  for (const inp of document.querySelectorAll('input[type="file"]')) {
+    if (inp.id === 'imageFileInput') continue; // skip image inputs
+    fileInput = inp;
+    break;
   }
 
-  // Also try setting the file input directly (works if not shadow DOM blocked)
-  if (!attached) {
-    for (const inp of document.querySelectorAll('input[type="file"]')) {
-      if (inp.id === 'imageFileInput') continue;
-      inp.files = dt.files;
-      inp.dispatchEvent(new Event('change', { bubbles: true }));
-      inp.dispatchEvent(new Event('input',  { bubbles: true }));
-      attached = true;
+  // Method B: search shadow roots
+  if (!fileInput) {
+    for (const el of document.querySelectorAll('*')) {
+      if (!el.shadowRoot) continue;
+      const inp = el.shadowRoot.querySelector('input[type="file"]');
+      if (inp && inp.id !== 'imageFileInput') { fileInput = inp; break; }
+    }
+  }
+
+  if (!fileInput) {
+    setStatus('❌ Could not find file input. Please click "Upload file" and select the file manually.', '#ef4444');
+    return;
+  }
+
+  // ── Step 3: Assign file to the input ──────────────────────────────────────
+  setStatus('Step 2 — Attaching price file…');
+
+  // Make input accessible if hidden
+  fileInput.style.display = 'block';
+  fileInput.style.opacity = '0';
+  fileInput.style.position = 'fixed';
+  fileInput.style.pointerEvents = 'none';
+
+  Object.defineProperty(fileInput, 'files', {
+    value: dt.files,
+    configurable: true,
+    writable: false
+  });
+
+  fileInput.dispatchEvent(new Event('change',  { bubbles: true }));
+  fileInput.dispatchEvent(new Event('input',   { bubbles: true }));
+
+  setStatus(`Step 2 — File "${fileName}" attached. Waiting for Amazon to validate…`);
+  await wait(3000);
+
+  // ── Step 4: Click "Upload file" button to trigger file picker bypass ───────
+  // On some versions, clicking the label/button is needed to register the file
+  const uploadBtns = Array.from(document.querySelectorAll('button, input[type="button"], input[type="submit"], label'));
+  for (const btn of uploadBtns) {
+    const txt = (btn.textContent || btn.value || btn.getAttribute('aria-label') || '').trim().toLowerCase();
+    if (txt === 'upload file' || txt === 'choose file' || txt === 'browse') {
+      // Don't actually click (that opens native file dialog) — just dispatch change
       break;
     }
   }
 
-  // Last resort — try all shadow roots
-  if (!attached) {
-    const allEls = document.querySelectorAll('*');
-    for (const el of allEls) {
-      if (!el.shadowRoot) continue;
-      const inp = el.shadowRoot.querySelector('input[type="file"]');
-      if (inp && inp.id !== 'imageFileInput') {
-        inp.files = dt.files;
-        inp.dispatchEvent(new Event('change', { bubbles: true }));
-        attached = true;
-        break;
-      }
-      // Also try drop zone inside shadow root
-      const dz = el.shadowRoot.querySelector('[class*="file-upload"], [class*="drop"]');
-      if (dz) {
-        dz.dispatchEvent(new DragEvent('dragenter', { bubbles: true, cancelable: true, dataTransfer: dt }));
-        await wait(100);
-        dz.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }));
-        attached = true;
-        break;
-      }
-    }
-  }
-
-  if (!attached) {
-    setStatus('❌ Could not find upload area. Please attach the file manually.', '#ef4444');
-    return;
-  }
-
-  setStatus(`Step 3 — File "${fileName}" attached. Waiting for Amazon to process...`);
-  await wait(4000); // Give Amazon time to detect file and enable Submit button
-
-  // Step 4: Click Submit products button — retry up to 5 times with 2s gaps
-  setStatus('Step 4 — Clicking Submit products...');
+  // ── Step 5: Find and click Submit button — retry up to 8 times ────────────
+  setStatus('Step 3 — Waiting for Submit products button…');
   let submitted = false;
-  for (let attempt = 0; attempt < 5; attempt++) {
-    for (const btn of document.querySelectorAll('button')) {
-      if (/submit products/i.test(btn.textContent) && !btn.disabled) {
+
+  for (let attempt = 0; attempt < 8; attempt++) {
+    // Re-query each attempt since DOM may update
+    const allBtns = document.querySelectorAll('button, input[type="submit"]');
+    for (const btn of allBtns) {
+      const txt = (btn.textContent || btn.value || '').trim().toLowerCase();
+      if ((txt.includes('submit') || txt.includes('upload')) && !btn.disabled && btn.offsetParent !== null) {
+        // Skip "Upload file" button (opens file dialog)
+        if (txt === 'upload file' || txt === 'choose file') continue;
         btn.click();
         submitted = true;
         break;
       }
     }
     if (submitted) break;
-    setStatus(`Step 4 — Waiting for Submit button to become active... (${attempt + 1}/5)`);
+    setStatus(`Step 3 — Waiting for Submit button… (${attempt + 1}/8)`);
     await wait(2000);
   }
 
   if (submitted) {
-    setStatus('✅ Done! Price file submitted. Amazon updates prices in 15-30 minutes.', '#10b981');
+    setStatus('✅ Submitted! Amazon will process prices in 15–30 minutes. Check upload status below.', '#10b981');
     chrome.storage.local.remove(['pendingUploadContent', 'pendingUploadName', 'pendingUploadTimestamp']);
   } else {
-    setStatus('⚠️ File attached — Submit button not ready yet. Click "Submit products" to finish.', '#d97706');
+    setStatus('⚠️ File attached but Submit button did not activate. Scroll down and click "Submit products" manually.', '#d97706');
   }
 
-  setTimeout(() => banner.remove(), 30000);
+  // Auto-remove banner after 45s
+  setTimeout(() => { if (banner.parentNode) banner.remove(); }, 45000);
 }
 
 // ─── Bulk ASIN handler ────────────────────────────────────────────────────────
