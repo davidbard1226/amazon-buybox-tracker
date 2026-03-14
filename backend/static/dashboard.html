@@ -429,6 +429,22 @@ tr[id^="qr-"] td input{pointer-events:auto;position:relative;z-index:20;}
   </div>
 
   <div class="card">
+    <h2>🔌 Chrome Extension Auto-Upload</h2>
+    <p style="color:#94a3b8;margin-bottom:12px;">Save your extension ID once — then the 🤖 Reprice button uploads directly to Seller Central automatically.</p>
+    <div style="background:#1a2e44;border:1px solid #2563eb;border-radius:8px;padding:12px;margin-bottom:14px;font-size:0.875rem;color:#93c5fd;">
+      How to find your Extension ID: open <b>chrome://extensions</b> → find <b>Amazon Buybox Tracker</b> → copy the ID under the name (32 characters).
+    </div>
+    <div style="display:flex;gap:12px;align-items:flex-end;">
+      <div class="form-group" style="flex:1;">
+        <label>Extension ID</label>
+        <input type="text" id="extIdInput" placeholder="abcdefghijklmnopabcdefghijklmnop" style="font-family:monospace;" value="${localStorage.getItem('buyboxExtId')||''}"/>
+      </div>
+      <button class="btn btn-primary" onclick="saveExtId()">💾 Save</button>
+    </div>
+    <div id="extIdMsg" style="margin-top:10px;"></div>
+  </div>
+
+  <div class="card">
     <h2>🔄 Auto-Refresh Scheduler</h2>
     <p style="color:#94a3b8;margin-bottom:18px;font-size:1rem;">Automatically refresh buybox data for all tracked ASINs on a schedule.</p>
     <div id="schedulerStatus" style="background:#0f172a;border-radius:8px;padding:16px;margin-bottom:18px;font-size:1rem;color:#94a3b8;">Loading scheduler status...</div>
@@ -1306,16 +1322,36 @@ function downloadQuickReprice(asin, sku) {
     ['sku','price','minimum-seller-allowed-price','maximum-seller-allowed-price','quantity','leadtime-to-ship','fulfillment-channel'].join('\t'),
     [sku, price.toFixed(2), '', '', '', '', 'DEFAULT'].join('\t'),
   ];
-  const blob = new Blob([lines.join('\n')], {type: 'text/plain'});
+  const content = lines.join('\n');
+  const fileName = `reprice_${sku}_R${price}_${new Date().toISOString().slice(0,10)}.txt`;
+
+  // If extension ID saved — send directly to extension for auto-upload
+  const extId = localStorage.getItem('buyboxExtId');
+  if (extId && window.chrome && chrome.runtime && chrome.runtime.sendMessage) {
+    chrome.runtime.sendMessage(extId, { action: 'autoUploadPriceFile', content, fileName, skuCount: 1 }, (resp) => {
+      if (chrome.runtime.lastError || !resp || !resp.success) {
+        // Extension unreachable — fall back to download
+        _doDownload(content, fileName);
+        showAlert('alertBox', `⚠️ Extension not found — downloaded file instead. <a href="https://sellercentral.amazon.co.za/listing/upload" target="_blank" style="color:#f97316;">Upload manually →</a>`, 'error');
+      } else {
+        showAlert('alertBox', `🤖 Seller Central opening — <b>${sku}</b> at <b>R${price}</b> being uploaded automatically...`, 'success');
+      }
+    });
+  } else {
+    // No extension ID — just download
+    _doDownload(content, fileName);
+    showAlert('alertBox', `✅ Downloaded for <b>${sku}</b> at <b>R${price}</b>. <a href="https://sellercentral.amazon.co.za/listing/upload" target="_blank" style="color:#f97316;">Upload to Seller Central →</a>`, 'success');
+  }
+  toggleQuickReprice(asin);
+}
+
+function _doDownload(content, fileName) {
+  const blob = new Blob([content], {type: 'text/plain'});
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
-  a.href = url;
-  a.download = `reprice_${sku}_R${price}_${new Date().toISOString().slice(0,10)}.txt`;
+  a.href = url; a.download = fileName;
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
   URL.revokeObjectURL(url);
-  // Show upload link
-  showAlert('alertBox', `✅ Downloaded reprice file for <b>${sku}</b> at <b>R${price}</b>. <a href="https://sellercentral.amazon.co.za/listing/upload" target="_blank" style="color:#f97316;">Upload to Seller Central →</a>`, 'success');
-  toggleQuickReprice(asin); // close the panel
 }
 
 function downloadPriceFile(type) {
@@ -1923,6 +1959,13 @@ function loadAnalytics() {
 }
 
 // ── Settings Page ─────────────────────────────────────────────────
+function saveExtId() {
+  const val = (document.getElementById('extIdInput').value || '').trim();
+  if (!val || val.length < 10) { showAlert('extIdMsg', '❌ Invalid Extension ID', 'error'); return; }
+  localStorage.setItem('buyboxExtId', val);
+  showAlert('extIdMsg', '✅ Saved! Reprice button will now auto-upload to Seller Central.', 'success');
+}
+
 async function loadSettings() {
   try {
     const r = await fetch(API + '/api/alerts/settings');
