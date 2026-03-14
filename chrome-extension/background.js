@@ -514,7 +514,7 @@ async function handleAutoUpload(content, fileName, skuCount) {
 
   return new Promise((resolve, reject) => {
     chrome.tabs.create({
-      url: 'https://sellercentral.amazon.co.za/listing/upload?ref=su_ui',
+      url: 'https://sellercentral.amazon.co.za/product-search/bulk',
       active: true
     }, (tab) => {
       const onUpdated = (tabId, info) => {
@@ -552,80 +552,107 @@ async function sellerCentralAutoUpload() {
 
   const content  = stored.pendingUploadContent;
   const fileName = stored.pendingUploadName || 'amazon_reprice.txt';
+  const wait     = ms => new Promise(r => setTimeout(r, ms));
 
   // Show banner
   const banner = document.createElement('div');
-  banner.id = 'bb-upload-banner';
-  banner.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#f97316;color:#fff;padding:14px 20px;font-size:14px;font-weight:bold;z-index:99999;text-align:center;box-shadow:0 2px 8px rgba(0,0,0,0.3);';
-  banner.innerHTML = '🤖 Buybox Tracker: Attaching price file automatically...';
+  banner.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#f97316;color:#fff;padding:14px 20px;font-size:14px;font-weight:bold;z-index:99999;text-align:center;';
+  banner.innerHTML = '🤖 Buybox Tracker: Attaching price file...';
   document.body.prepend(banner);
 
-  const wait = ms => new Promise(r => setTimeout(r, ms));
-
-  // Step 1: Select "Price & Quantity" template
-  const selectTemplate = async () => {
-    // Try dropdown
-    const selects = document.querySelectorAll('select');
-    for (const sel of selects) {
-      for (const opt of sel.options) {
-        if (/price.*quant|price.*invent/i.test(opt.text)) {
-          sel.value = opt.value;
-          sel.dispatchEvent(new Event('change', { bubbles: true }));
-          await wait(1000);
-          return true;
+  // The page is /product-search/bulk — find the file drop zone input
+  // It's NOT imageFileInput (that's for images) — it's the hidden input behind the "Upload file" button
+  const attachFile = async () => {
+    // Try all file inputs, skip the image one
+    const inputs = document.querySelectorAll('input[type="file"]');
+    let fileInput = null;
+    for (const inp of inputs) {
+      if (inp.id === 'imageFileInput') continue; // skip image input
+      fileInput = inp;
+      break;
+    }
+    // If none found, make the hidden one visible and try again
+    if (!fileInput) {
+      for (const inp of inputs) {
+        if (/excel|tsv|txt|spreadsheet/i.test(inp.accept || '')) {
+          fileInput = inp;
+          break;
         }
       }
     }
-    // Try radio buttons / clickable labels
-    const all = document.querySelectorAll('label, input[type="radio"], span, li');
-    for (const el of all) {
-      const t = el.textContent.trim();
-      if (/price.*quant/i.test(t) && t.length < 60) {
-        el.click();
+    // Last resort — try the drop zone by clicking "Upload file" button to reveal input
+    if (!fileInput) {
+      const btns = [...document.querySelectorAll('button, span, div')];
+      const uploadBtn = btns.find(b => /^upload file$/i.test(b.textContent.trim()));
+      if (uploadBtn) {
+        uploadBtn.click();
         await wait(1000);
-        return true;
+        // Try again after click
+        for (const inp of document.querySelectorAll('input[type="file"]')) {
+          if (inp.id !== 'imageFileInput') { fileInput = inp; break; }
+        }
       }
     }
-    return false;
-  };
 
-  // Step 2: Attach the file
-  const attachFile = async () => {
-    const fileInput = document.querySelector('input[type="file"]');
     if (!fileInput) return false;
+
     const blob = new Blob([content], { type: 'text/plain' });
     const file = new File([blob], fileName, { type: 'text/plain' });
-    const dt = new DataTransfer();
+    const dt   = new DataTransfer();
     dt.items.add(file);
     fileInput.files = dt.files;
     fileInput.dispatchEvent(new Event('change', { bubbles: true }));
-    fileInput.dispatchEvent(new Event('input', { bubbles: true }));
-    await wait(1500);
+    fileInput.dispatchEvent(new Event('input',  { bubbles: true }));
     return true;
   };
 
-  // Step 3: Click upload/submit button
-  const clickUpload = async () => {
-    const btns = document.querySelectorAll('button, input[type="submit"], a');
-    for (const btn of btns) {
-      const t = (btn.textContent || btn.value || '').trim();
-      if (/^upload$|^submit$|upload file|upload now/i.test(t)) {
-        btn.click();
-        return true;
-      }
-    }
-    return false;
+  // Also try drag-and-drop on the drop zone
+  const dropFile = async () => {
+    const dropZone = document.querySelector('[class*="dropzone"], [class*="drop-zone"], [class*="upload"], .aiinhbfoop-border');
+    if (!dropZone) return false;
+    const blob = new Blob([content], { type: 'text/plain' });
+    const file = new File([blob], fileName, { type: 'text/plain' });
+    const dt   = new DataTransfer();
+    dt.items.add(file);
+    ['dragenter','dragover','drop'].forEach(evName => {
+      const ev = new DragEvent(evName, { bubbles: true, cancelable: true, dataTransfer: dt });
+      dropZone.dispatchEvent(ev);
+    });
+    return true;
   };
 
-  await selectTemplate();
-  const attached = await attachFile();
+  await wait(1000);
+  let ok = await attachFile();
+  if (!ok) ok = await dropFile();
 
-  if (attached) {
-    banner.innerHTML = '🤖 Buybox Tracker: File attached ✅ — clicking Upload...';
-    await wait(1000);
-    const clicked = await clickUpload();
+  if (ok) {
+    banner.innerHTML = '🤖 File attached ✅ — looking for Upload button...';
+    await wait(2000);
+    // Click upload/submit button
+    const allBtns = document.querySelectorAll('button, input[type="submit"]');
+    let clicked = false;
+    for (const btn of allBtns) {
+      const t = (btn.textContent || btn.value || '').trim();
+      if (/^upload$/i.test(t) || /^submit$/i.test(t) || /upload file/i.test(t)) {
+        btn.click();
+        clicked = true;
+        break;
+      }
+    }
     if (clicked) {
       banner.style.background = '#10b981';
+      banner.innerHTML = '✅ Price file uploaded! Amazon will update prices in 15-30 minutes.';
+      chrome.storage.local.remove(['pendingUploadContent', 'pendingUploadName', 'pendingUploadTimestamp']);
+    } else {
+      banner.innerHTML = '🤖 File attached ✅ — please click <b>Upload</b> to submit.';
+    }
+  } else {
+    banner.style.background = '#ef4444';
+    banner.innerHTML = '❌ Could not attach file. Please drag and drop the file manually onto the upload area.';
+  }
+
+  setTimeout(() => banner.remove(), 20000);
+}
       banner.innerHTML = '✅ Buybox Tracker: Price file uploaded! Amazon will update prices within 15-30 minutes.';
       // Clear pending upload
       chrome.storage.local.remove(['pendingUploadContent', 'pendingUploadName', 'pendingUploadTimestamp']);
