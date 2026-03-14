@@ -585,34 +585,71 @@ async function sellerCentralAutoUpload() {
   setStatus('Step 2 — Attaching price file...');
   await wait(500);
 
-  // Find the file input — it's hidden inside shadow DOM of kat-button#select-file
-  let fileInput = null;
-  // Check regular inputs first (skip image input)
-  for (const inp of document.querySelectorAll('input[type="file"]')) {
-    if (inp.id !== 'imageFileInput') { fileInput = inp; break; }
-  }
-  // If not found, look inside shadow roots
-  if (!fileInput) {
-    for (const el of document.querySelectorAll('*')) {
-      if (el.shadowRoot) {
-        const inp = el.shadowRoot.querySelector('input[type="file"]');
-        if (inp && inp.id !== 'imageFileInput') { fileInput = inp; break; }
-      }
-    }
-  }
-
-  if (!fileInput) {
-    setStatus('❌ Could not find file input. Please attach the file manually.', '#ef4444');
-    return;
-  }
-
   const blob = new Blob([content], { type: 'text/plain' });
   const file = new File([blob], fileName, { type: 'text/plain' });
   const dt   = new DataTransfer();
   dt.items.add(file);
-  fileInput.files = dt.files;
-  fileInput.dispatchEvent(new Event('change', { bubbles: true }));
-  fileInput.dispatchEvent(new Event('input',  { bubbles: true }));
+
+  // Find the drop zone — the visible dashed box on the page
+  const dropZone = document.querySelector(
+    '.file-upload-area, [class*="file-upload-area"], [class*="dropzone"], ' +
+    '[class*="drop-zone"], [class*="upload-area"], [class*="file-upload"]'
+  );
+
+  let attached = false;
+
+  if (dropZone) {
+    // Dispatch drag events on the drop zone
+    dropZone.dispatchEvent(new DragEvent('dragenter', { bubbles: true, cancelable: true, dataTransfer: dt }));
+    await wait(200);
+    dropZone.dispatchEvent(new DragEvent('dragover',  { bubbles: true, cancelable: true, dataTransfer: dt }));
+    await wait(200);
+    dropZone.dispatchEvent(new DragEvent('drop',      { bubbles: true, cancelable: true, dataTransfer: dt }));
+    await wait(1000);
+    attached = true;
+    setStatus(`Step 2 — Dropped file onto upload area...`);
+  }
+
+  // Also try setting the file input directly (works if not shadow DOM blocked)
+  if (!attached) {
+    for (const inp of document.querySelectorAll('input[type="file"]')) {
+      if (inp.id === 'imageFileInput') continue;
+      inp.files = dt.files;
+      inp.dispatchEvent(new Event('change', { bubbles: true }));
+      inp.dispatchEvent(new Event('input',  { bubbles: true }));
+      attached = true;
+      break;
+    }
+  }
+
+  // Last resort — try all shadow roots
+  if (!attached) {
+    const allEls = document.querySelectorAll('*');
+    for (const el of allEls) {
+      if (!el.shadowRoot) continue;
+      const inp = el.shadowRoot.querySelector('input[type="file"]');
+      if (inp && inp.id !== 'imageFileInput') {
+        inp.files = dt.files;
+        inp.dispatchEvent(new Event('change', { bubbles: true }));
+        attached = true;
+        break;
+      }
+      // Also try drop zone inside shadow root
+      const dz = el.shadowRoot.querySelector('[class*="file-upload"], [class*="drop"]');
+      if (dz) {
+        dz.dispatchEvent(new DragEvent('dragenter', { bubbles: true, cancelable: true, dataTransfer: dt }));
+        await wait(100);
+        dz.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }));
+        attached = true;
+        break;
+      }
+    }
+  }
+
+  if (!attached) {
+    setStatus('❌ Could not find upload area. Please attach the file manually.', '#ef4444');
+    return;
+  }
 
   setStatus(`Step 3 — File "${fileName}" attached. Waiting for Amazon to process...`);
   await wait(4000); // Give Amazon time to detect file and enable Submit button
