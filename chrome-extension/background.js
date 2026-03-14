@@ -617,15 +617,20 @@ async function sellerCentralAutoUpload() {
   setStatus(`Step 3 — File "${fileName}" attached. Waiting for Amazon to process...`);
   await wait(4000); // Give Amazon time to detect file and enable Submit button
 
-  // Step 4: Click Submit products button
+  // Step 4: Click Submit products button — retry up to 5 times with 2s gaps
   setStatus('Step 4 — Clicking Submit products...');
   let submitted = false;
-  for (const btn of document.querySelectorAll('button')) {
-    if (/submit products/i.test(btn.textContent) && !btn.disabled) {
-      btn.click();
-      submitted = true;
-      break;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    for (const btn of document.querySelectorAll('button')) {
+      if (/submit products/i.test(btn.textContent) && !btn.disabled) {
+        btn.click();
+        submitted = true;
+        break;
+      }
     }
+    if (submitted) break;
+    setStatus(`Step 4 — Waiting for Submit button to become active... (${attempt + 1}/5)`);
+    await wait(2000);
   }
 
   if (submitted) {
