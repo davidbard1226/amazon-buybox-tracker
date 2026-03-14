@@ -2485,7 +2485,7 @@ function fallbackDownloadPriceFile(fileContent, fileName) {
   document.body.appendChild(a); a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
-  setTimeout(() => window.open('https://sellercentral.amazon.co.za/listing/upload?ref_=xx_upload_tnav_upload', '_blank'), 400);
+  setTimeout(() => window.open('https://sellercentral.amazon.co.za/product-search/bulk', '_blank'), 400);
   showPricingAlert('📥 <b>Flat file downloaded</b> — Seller Central is opening. Upload the file via the Spreadsheet tab → Choose File → Submit products.', 'info');
 }
 

@@ -511,8 +511,8 @@ async function handleAutoUpload(content, fileName, skuCount) {
     pendingUploadTimestamp: Date.now()
   });
 
-  // Correct URL: Inventory > Upload products & inventory (price & quantity feed)
-  const uploadUrl = 'https://sellercentral.amazon.co.za/listing/upload?ref_=xx_upload_tnav_upload';
+  // Correct URL — Amazon SA price & quantity upload page
+  const uploadUrl = 'https://sellercentral.amazon.co.za/product-search/bulk';
 
   return new Promise((resolve, reject) => {
     chrome.tabs.create({ url: uploadUrl, active: true }, (tab) => {
@@ -638,37 +638,42 @@ async function sellerCentralAutoUpload() {
     }
   }
 
-  // ── Step 5: Find and click Submit button — retry up to 8 times ────────────
-  setStatus('Step 3 — Waiting for Submit products button…');
+  // ── Step 5: Find and click Submit button — retry up to 15 times (30s total) ─
+  setStatus('Step 3 — Waiting for Amazon to validate file and enable Submit…');
   let submitted = false;
 
-  for (let attempt = 0; attempt < 8; attempt++) {
-    // Re-query each attempt since DOM may update
+  for (let attempt = 0; attempt < 15; attempt++) {
     const allBtns = document.querySelectorAll('button, input[type="submit"]');
     for (const btn of allBtns) {
       const txt = (btn.textContent || btn.value || '').trim().toLowerCase();
-      if ((txt.includes('submit') || txt.includes('upload')) && !btn.disabled && btn.offsetParent !== null) {
-        // Skip "Upload file" button (opens file dialog)
-        if (txt === 'upload file' || txt === 'choose file') continue;
-        btn.click();
-        submitted = true;
-        break;
-      }
+      // Match "submit products" or "submit" but skip upload/choose/browse buttons
+      if (!txt.includes('submit') && !txt.includes('upload')) continue;
+      if (txt === 'upload file' || txt === 'upload' || txt === 'choose file' || txt === 'browse') continue;
+      if (btn.disabled) continue;
+      if (btn.offsetParent === null) continue; // not visible
+      // Also check aria-disabled
+      if (btn.getAttribute('aria-disabled') === 'true') continue;
+      btn.click();
+      submitted = true;
+      break;
     }
     if (submitted) break;
-    setStatus(`Step 3 — Waiting for Submit button… (${attempt + 1}/8)`);
+    // Show progress every 2 attempts
+    if (attempt % 2 === 0) {
+      setStatus(`Step 3 — Waiting for Submit products button… (${Math.round((attempt/15)*100)}%)`);
+    }
     await wait(2000);
   }
 
   if (submitted) {
-    setStatus('✅ Submitted! Amazon will process prices in 15–30 minutes. Check upload status below.', '#10b981');
+    setStatus('✅ Price changes submitted to Amazon! Prices update in 15–30 minutes. You can close this tab.', '#10b981');
     chrome.storage.local.remove(['pendingUploadContent', 'pendingUploadName', 'pendingUploadTimestamp']);
   } else {
-    setStatus('⚠️ File attached but Submit button did not activate. Scroll down and click "Submit products" manually.', '#d97706');
+    setStatus('⚠️ File attached — Submit button not activated automatically. Click the blue "Submit products" button to finish.', '#d97706');
   }
 
-  // Auto-remove banner after 45s
-  setTimeout(() => { if (banner.parentNode) banner.remove(); }, 45000);
+  // Auto-remove banner after 60s
+  setTimeout(() => { if (banner.parentNode) banner.remove(); }, 60000);
 }
 
 // ─── Bulk ASIN handler ────────────────────────────────────────────────────────
