@@ -628,13 +628,17 @@ async function sellerCentralAutoUpload() {
   if (ok) {
     banner.innerHTML = '🤖 File attached ✅ — looking for Upload button...';
     await wait(2000);
-    // Click upload/submit button
-    const allBtns = document.querySelectorAll('button, input[type="submit"]');
+    // Try every possible button/element that could be the upload trigger
     let clicked = false;
-    for (const btn of allBtns) {
-      const t = (btn.textContent || btn.value || '').trim();
-      if (/^upload$/i.test(t) || /^submit$/i.test(t) || /upload file/i.test(t)) {
-        btn.click();
+    const allEls = [...document.querySelectorAll('button, input[type="submit"], span[role="button"], div[role="button"], a[role="button"]')];
+    for (const el of allEls) {
+      const t = (el.textContent || el.value || el.getAttribute('aria-label') || '').trim().toLowerCase();
+      const id = (el.id || '').toLowerCase();
+      if (t === 'upload' || t === 'submit' || t === 'upload file' || t === 'upload now' ||
+          id === 'upload' || id === 'submit-btn' || id.includes('upload-btn') ||
+          /^upload/i.test(t)) {
+        console.log('🤖 Clicking:', el.tagName, el.id, t);
+        el.click();
         clicked = true;
         break;
       }
