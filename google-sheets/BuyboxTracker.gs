@@ -477,3 +477,86 @@ function removeHourlyTrigger() {
   SpreadsheetApp.getUi().alert("✅ Removed " + removed + " auto-refresh trigger(s).");
 }
 
+// ── doPost — Backend pushes buybox data to this sheet ────────
+// Deploy this script as a Web App (Execute as: Me, Who has access: Anyone)
+// Then set GSHEET_WEBAPP_URL env var on Render to the deployment URL
+function doPost(e) {
+  try {
+    var payload = JSON.parse(e.postData.contents);
+    var products = payload.products || [];
+    if (!products.length) return jsonResponse({ok: true, updated: 0});
+
+    var ss    = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = ss.getSheetByName(SHEET_NAME);
+    if (!sheet) return jsonResponse({ok: false, error: "Sheet not found"});
+
+    // Build SKU → row index lookup from existing data
+    var lastRow = sheet.getLastRow();
+    var skuMap  = {};
+    if (lastRow > 1) {
+      var skuData = sheet.getRange(2, C_SKU, lastRow - 1, 1).getValues();
+      for (var i = 0; i < skuData.length; i++) {
+        if (skuData[i][0]) skuMap[String(skuData[i][0]).toLowerCase()] = i + 2;
+      }
+    }
+
+    var updated = 0;
+    var added   = 0;
+
+    for (var j = 0; j < products.length; j++) {
+      var p       = products[j];
+      var cost    = p.cost_price  || 0;
+      var myPrice = p.my_price    || 0;
+      var profit  = (cost > 0 && myPrice > 0) ? Math.round((myPrice * (1 - AMAZON_FEE) - cost) * 100) / 100 : "";
+      var margin  = (profit !== "" && myPrice > 0) ? Math.round((profit / myPrice) * 1000) / 10 : "";
+      var minP    = cost > 0 ? Math.round(cost / (1 - AMAZON_FEE - MIN_MARGIN))    : "";
+      var maxP    = cost > 0 ? Math.round(cost / (1 - AMAZON_FEE - TARGET_MARGIN)) : "";
+
+      var row = [
+        p.sku           || "",
+        p.asin          || "",
+        p.title         || "",
+        myPrice         || "",
+        cost            || "",
+        minP,
+        maxP,
+        p.buybox_price  || "",
+        p.buybox_seller || "",
+        p.buybox_status || "",
+        profit,
+        margin,
+        p.cost_supplier || "",
+        p.my_stock !== null && p.my_stock !== undefined ? p.my_stock : "",
+        p.scraped_at ? new Date(p.scraped_at).toLocaleString() : "",
+        p.sku ? "Push Price" : ""
+      ];
+
+      var skuKey = p.sku ? p.sku.toLowerCase() : null;
+      if (skuKey && skuMap[skuKey]) {
+        // Update existing row
+        sheet.getRange(skuMap[skuKey], 1, 1, row.length).setValues([row]);
+        updated++;
+      } else {
+        // Append new row
+        sheet.appendRow(row);
+        added++;
+      }
+    }
+
+    // Re-apply formatting
+    var newLastRow = sheet.getLastRow();
+    if (newLastRow > 1) applyConditionalFormatting(sheet, newLastRow - 1);
+
+    return jsonResponse({ok: true, updated: updated, added: added, total: products.length});
+
+  } catch(err) {
+    return jsonResponse({ok: false, error: err.message});
+  }
+}
+
+function jsonResponse(obj) {
+  return ContentService
+    .createTextOutput(JSON.stringify(obj))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+

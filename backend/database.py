@@ -77,6 +77,7 @@ class TrackedASIN(Base):
     # Cost data
     cost_price = Column(Float, nullable=True)
     cost_supplier = Column(String(255), nullable=True)
+    min_price = Column(Float, nullable=True)   # min viable sell price (floor)
 
 
 class PriceHistory(Base):
@@ -102,7 +103,11 @@ def init_db():
         logger.info("Database tables initialized")
         # Migration: add cost_price and cost_supplier columns if they don't exist
         with engine.connect() as conn:
-            for col, col_type in [("cost_price", "FLOAT"), ("cost_supplier", "VARCHAR(255)")]:
+            for col, col_type in [
+                ("cost_price", "FLOAT"),
+                ("cost_supplier", "VARCHAR(255)"),
+                ("min_price", "FLOAT"),
+            ]:
                 try:
                     conn.execute(text(f"ALTER TABLE tracked_asins ADD COLUMN {col} {col_type}"))
                     conn.commit()
