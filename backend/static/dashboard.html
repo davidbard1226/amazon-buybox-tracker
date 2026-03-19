@@ -119,6 +119,7 @@ tr[id^="qr-"] td input{pointer-events:auto;position:relative;z-index:20;}
       <button class="nav-btn" onclick="showPage('analytics')">📊 Analytics</button>
       <button class="nav-btn" onclick="showPage('settings')">⚙️ Settings</button>
       <button class="nav-btn" onclick="showPage('pricing')">💲 Manage Pricing</button>
+      <button class="nav-btn" onclick="showPage('intelligence')">🕵️ Intelligence</button>
     </div>
     <span id="backendBadge" class="badge badge-offline">⚫ Offline</span>
   </div>
@@ -158,6 +159,7 @@ tr[id^="qr-"] td input{pointer-events:auto;position:relative;z-index:20;}
       <button class="filter-btn" onclick="setFilter('winning',this)">🏆 Winning</button>
       <button class="filter-btn" onclick="setFilter('losing',this)">😞 Losing</button>
       <button class="filter-btn" onclick="setFilter('amazon',this)">🛒 Amazon</button>
+      <button class="filter-btn" onclick="setFilter('win-at-loss',this)">⚠️ Win at Loss</button>
       <span style="font-size:0.8rem;color:#94a3b8;align-self:center;margin-left:8px;">Seller:</span>
       <select id="sellerFilter" onchange="renderTable()" style="background:#0f172a;border:1px solid #334155;color:#e2e8f0;padding:6px 12px;border-radius:20px;font-size:0.875rem;outline:none;">
         <option value="">All Sellers</option>
@@ -477,6 +479,30 @@ tr[id^="qr-"] td input{pointer-events:auto;position:relative;z-index:20;}
   </div>
 </div>
 
+
+<!-- ========== INTELLIGENCE PAGE ========== -->
+<div id="page-intelligence" class="page">
+  <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px;flex-wrap:wrap">
+    <h2 style="margin:0;font-size:1.3rem">🕵️ Competitor Intelligence</h2>
+    <select id="intelDays" onchange="loadIntelligence()" style="background:#0f172a;border:1px solid #334155;color:#e2e8f0;padding:8px 12px;border-radius:6px;font-size:0.9rem">
+      <option value="1">Last 24h</option>
+      <option value="7" selected>Last 7 days</option>
+      <option value="14">Last 14 days</option>
+      <option value="30">Last 30 days</option>
+    </select>
+    <button class="btn btn-primary btn-sm" onclick="loadIntelligence()">🔄 Refresh</button>
+    <button class="btn btn-sm" style="background:#6366f1;color:#fff;padding:8px 16px;border-radius:6px;border:none;cursor:pointer;font-size:0.875rem;font-weight:600" onclick="sendDailySummaryNow()">📤 Send Daily Summary Now</button>
+    <div id="intelStatus" style="font-size:0.8rem;color:#94a3b8;margin-left:auto"></div>
+  </div>
+  <div class="stats-grid" id="intelStatsRow" style="margin-bottom:20px"></div>
+  <div id="intelWinAtLoss" style="margin-bottom:16px"></div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
+    <div class="card" style="margin:0"><h2>🏆 Most Active Competitors</h2><div id="intelCompetitors"></div></div>
+    <div class="card" style="margin:0"><h2>🔥 Most Volatile Products</h2><div id="intelVolatile"></div></div>
+  </div>
+  <div class="card"><h2>📉 Price Movement Log</h2><div id="intelPriceLog" style="max-height:420px;overflow-y:auto"></div></div>
+</div>
+
 </div><!-- end main -->
 <!-- ── REPRICE MODAL ─────────────────────────────────────────── -->
 <div id="repriceModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:1000;overflow-y:auto;">
@@ -616,6 +642,7 @@ function showPage(name) {
   if (name === 'dashboard') loadDashboard();
   if (name === 'analytics') loadAnalytics();
   if (name === 'settings') loadSettings();
+  if (name === 'intelligence') loadIntelligence();
   if (name === 'pricing') loadPricingTab();
 }
 
@@ -716,6 +743,9 @@ function renderTable() {
   const search = (document.getElementById('searchInput').value || '').toLowerCase();
   const sellerF = (document.getElementById('sellerFilter') ? document.getElementById('sellerFilter').value : '');
   let data = allProducts.filter(p => {
+    if (currentFilter === 'win-at-loss') {
+      return p.buybox_status === 'winning' && p.my_price && p.min_price && p.my_price < p.min_price;
+    }
     if (currentFilter !== 'all' && p.buybox_status !== currentFilter) return false;
     if (sellerF && p.buybox_seller !== sellerF) return false;
     if (search) {
@@ -2500,6 +2530,150 @@ function showPricingAlert(msg, type) {
 // ── End Manage Pricing ────────────────────────────────────────────────────────
 
 // ── Init ──────────────────────────────────────────────────────────
+
+// ================================================================
+// INTELLIGENCE TAB
+// ================================================================
+async function loadIntelligence() {
+  var days = parseInt(document.getElementById('intelDays').value) || 7;
+  var statusEl = document.getElementById('intelStatus');
+  if (statusEl) statusEl.textContent = 'Loading...';
+  try {
+    var r = await fetch(API + '/api/intelligence?days=' + days);
+    if (!r.ok) throw new Error('API error ' + r.status);
+    var d = await r.json();
+    renderIntelligence(d);
+    if (statusEl) statusEl.textContent = 'Updated: ' + new Date().toLocaleTimeString();
+  } catch(e) {
+    if (statusEl) statusEl.textContent = 'Error: ' + e.message;
+    var c = document.getElementById('intelCompetitors');
+    if (c) c.innerHTML = '<p style="color:#ef4444">Failed: ' + e.message + '</p>';
+  }
+}
+
+function renderIntelligence(d) {
+  var s = d.summary;
+  var statsEl = document.getElementById('intelStatsRow');
+  if (statsEl) {
+    statsEl.innerHTML = [
+      {val: s.total_price_changes, lbl: 'Price Changes', col: '#a78bfa'},
+      {val: s.unique_competitors,  lbl: 'Competitors',   col: '#ef4444'},
+      {val: s.winning + ' / ' + s.total_products, lbl: 'Winning', col: '#10b981'},
+      {val: s.win_at_loss_count, lbl: 'Win at Loss', col: s.win_at_loss_count > 0 ? '#ef4444' : '#10b981'},
+    ].map(function(x) {
+      return '<div class="stat-card"><div class="val" style="font-size:2rem;color:' + x.col + '">' + x.val + '</div><div class="lbl">' + x.lbl + '</div></div>';
+    }).join('');
+  }
+
+  var walEl = document.getElementById('intelWinAtLoss');
+  if (walEl) {
+    if (d.win_at_loss && d.win_at_loss.length > 0) {
+      var rows = d.win_at_loss.map(function(p) {
+        var loss = (p.my_price && p.min_price) ? (p.my_price - p.min_price).toFixed(2) : '-';
+        return '<tr style="border-bottom:1px solid #1e293b">'
+          + '<td style="padding:6px;font-family:monospace;font-size:0.8rem;color:#94a3b8">' + p.asin + '</td>'
+          + '<td style="padding:6px;color:#818cf8">' + (p.sku || '-') + '</td>'
+          + '<td style="padding:6px">' + (p.title || '').slice(0,40) + '</td>'
+          + '<td style="text-align:right;padding:6px;color:#ef4444">R' + (p.my_price ? p.my_price.toFixed(2) : '-') + '</td>'
+          + '<td style="text-align:right;padding:6px;color:#f97316">R' + (p.min_price ? p.min_price.toFixed(2) : '-') + '</td>'
+          + '<td style="text-align:right;padding:6px;color:#ef4444;font-weight:700">-R' + loss + '</td>'
+          + '</tr>';
+      }).join('');
+      walEl.innerHTML = '<div class="alert alert-error"><b>Warning: ' + d.win_at_loss.length + ' product(s) winning but selling BELOW min price:</b>'
+        + '<div style="overflow-x:auto;margin-top:8px"><table style="width:100%;border-collapse:collapse;font-size:0.85rem">'
+        + '<thead><tr style="color:#94a3b8;border-bottom:1px solid #334155"><th style="padding:6px;text-align:left">ASIN</th><th style="padding:6px;text-align:left">SKU</th><th style="padding:6px;text-align:left">Product</th><th style="padding:6px;text-align:right">My Price</th><th style="padding:6px;text-align:right">Min Price</th><th style="padding:6px;text-align:right">Loss</th></tr></thead>'
+        + '<tbody>' + rows + '</tbody></table></div></div>';
+    } else {
+      walEl.innerHTML = '<div class="alert alert-success">All margins healthy - no products winning at a loss.</div>';
+    }
+  }
+
+  var compEl = document.getElementById('intelCompetitors');
+  if (compEl) {
+    if (!d.top_competitors || !d.top_competitors.length) {
+      compEl.innerHTML = '<div class="empty-state"><p>No competitor data yet.</p></div>';
+    } else {
+      var compRows = d.top_competitors.map(function(c) {
+        var heat = c.price_changes > 10 ? '#ef4444' : c.price_changes > 4 ? '#f97316' : '#10b981';
+        return '<tr style="border-bottom:1px solid #1e293b"><td style="padding:7px;font-weight:600">' + c.seller + '</td>'
+          + '<td style="text-align:right;padding:7px;color:#ef4444;font-family:monospace">' + c.wins + '</td>'
+          + '<td style="text-align:right;padding:7px;font-family:monospace;color:' + heat + ';font-weight:700">' + c.price_changes + '</td>'
+          + '<td style="text-align:right;padding:7px;color:#f472b6;font-family:monospace">' + c.undercuts + '</td>'
+          + '<td style="text-align:right;padding:7px;color:#94a3b8">' + c.asin_count + '</td></tr>';
+      }).join('');
+      compEl.innerHTML = '<table style="width:100%;border-collapse:collapse;font-size:0.85rem">'
+        + '<thead><tr style="color:#94a3b8;font-size:0.75rem;text-transform:uppercase;border-bottom:1px solid #334155">'
+        + '<th style="padding:7px;text-align:left">Seller</th><th style="padding:7px;text-align:right">Wins</th>'
+        + '<th style="padding:7px;text-align:right">Changes</th><th style="padding:7px;text-align:right">Undercuts</th>'
+        + '<th style="padding:7px;text-align:right">ASINs</th></tr></thead><tbody>' + compRows + '</tbody></table>';
+    }
+  }
+
+  var volEl = document.getElementById('intelVolatile');
+  if (volEl) {
+    if (!d.volatile_asins || !d.volatile_asins.length) {
+      volEl.innerHTML = '<div class="empty-state"><p>No price changes yet.</p></div>';
+    } else {
+      var volRows = d.volatile_asins.map(function(a) {
+        var heat = a.changes > 10 ? '#ef4444' : a.changes > 4 ? '#f97316' : '#10b981';
+        return '<tr style="border-bottom:1px solid #1e293b">'
+          + '<td style="padding:7px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + a.title + '</td>'
+          + '<td style="padding:7px;font-family:monospace;font-size:0.75rem;color:#818cf8">' + (a.sku || a.asin) + '</td>'
+          + '<td style="text-align:right;padding:7px;font-family:monospace;font-weight:700;color:' + heat + '">' + a.changes + '</td>'
+          + '<td style="text-align:right;padding:7px;color:#94a3b8">' + a.competitor_count + '</td></tr>';
+      }).join('');
+      volEl.innerHTML = '<table style="width:100%;border-collapse:collapse;font-size:0.85rem">'
+        + '<thead><tr style="color:#94a3b8;font-size:0.75rem;text-transform:uppercase;border-bottom:1px solid #334155">'
+        + '<th style="padding:7px;text-align:left">Product</th><th style="padding:7px;text-align:left">ASIN/SKU</th>'
+        + '<th style="padding:7px;text-align:right">Changes</th><th style="padding:7px;text-align:right">Sellers</th></tr></thead>'
+        + '<tbody>' + volRows + '</tbody></table>';
+    }
+  }
+
+  var logEl = document.getElementById('intelPriceLog');
+  if (logEl) {
+    if (!d.price_movements || !d.price_movements.length) {
+      logEl.innerHTML = '<div class="empty-state"><p>No price movements yet.</p></div>';
+    } else {
+      var logRows = d.price_movements.map(function(m) {
+        var col = m.diff < 0 ? '#10b981' : '#ef4444';
+        var sign = m.diff > 0 ? '+' : '';
+        var t = m.ts ? new Date(m.ts).toLocaleString('en-ZA', {dateStyle:'short', timeStyle:'short'}) : '-';
+        return '<tr style="border-bottom:1px solid #0f172a">'
+          + '<td style="padding:5px 6px;font-family:monospace;font-size:0.75rem;color:#94a3b8;white-space:nowrap">' + t + '</td>'
+          + '<td style="padding:5px 6px;font-family:monospace;font-size:0.75rem;color:#94a3b8">' + m.asin + '</td>'
+          + '<td style="padding:5px 6px;font-family:monospace;font-size:0.75rem;color:#818cf8">' + (m.sku || '-') + '</td>'
+          + '<td style="padding:5px 6px;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + m.title + '</td>'
+          + '<td style="padding:5px 6px;color:#f472b6;font-size:0.8rem">' + m.seller + '</td>'
+          + '<td style="text-align:right;padding:5px 6px;font-family:monospace;color:#94a3b8">R' + (m.prev_price ? m.prev_price.toFixed(2) : '-') + '</td>'
+          + '<td style="text-align:right;padding:5px 6px;font-family:monospace;font-weight:700">R' + (m.price ? m.price.toFixed(2) : '-') + '</td>'
+          + '<td style="text-align:right;padding:5px 6px;font-family:monospace;color:' + col + '">' + sign + 'R' + Math.abs(m.diff || 0).toFixed(2) + '</td></tr>';
+      }).join('');
+      logEl.innerHTML = '<table style="width:100%;border-collapse:collapse;font-size:0.82rem">'
+        + '<thead><tr style="color:#94a3b8;font-size:0.75rem;text-transform:uppercase;border-bottom:1px solid #334155;position:sticky;top:0;background:#1e293b">'
+        + '<th style="padding:6px">Time</th><th style="padding:6px">ASIN</th><th style="padding:6px">SKU</th>'
+        + '<th style="padding:6px;max-width:150px">Product</th><th style="padding:6px">Seller</th>'
+        + '<th style="padding:6px;text-align:right">Was</th><th style="padding:6px;text-align:right">Now</th>'
+        + '<th style="padding:6px;text-align:right">Change</th></tr></thead><tbody>' + logRows + '</tbody></table>';
+    }
+  }
+}
+
+async function sendDailySummaryNow() {
+  var btn = event.target;
+  var orig = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Sending...';
+  try {
+    var r = await fetch(API + '/api/alerts/daily-summary', {method:'POST'});
+    var d = await r.json();
+    alert(d.success ? 'Daily summary sent to Telegram!' : 'Failed: ' + (d.message || 'Check Telegram settings'));
+  } catch(e) {
+    alert('Error: ' + e.message);
+  } finally {
+    btn.disabled = false; btn.textContent = orig;
+  }
+}
+
 checkHealth();
 setInterval(checkHealth, 30000);
 loadDashboard();
