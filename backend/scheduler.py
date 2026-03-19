@@ -89,14 +89,14 @@ def start_scheduler():
     global _interval_hours, _enabled
     settings = load_scheduler_settings()
     _interval_hours = settings.get("interval_hours", 6.0)
-    # Default to DISABLED - we use Chrome Extension for scraping to avoid bot detection.
-    # Enable via SCHEDULER_ENABLED=true env var on Render if you want server-side auto-refresh.
     _enabled = settings.get("enabled", False)
     if _enabled:
         _schedule_next()
         logger.info(f"Scheduler started - runs every {_interval_hours} hours")
     else:
         logger.info("Scheduler disabled by default - using Chrome Extension for scraping")
+    # Start daily summary if DAILY_SUMMARY_TIME env var is set (e.g. "08:00")
+    _schedule_daily_summary()
 
 def stop_scheduler():
     global _timer
@@ -133,3 +133,81 @@ def get_scheduler_status() -> dict:
         "next_run": _next_run,
         "total_asins": total,
     }
+
+
+# ============================================================================
+# Daily Summary Scheduler
+# ============================================================================
+
+_daily_timer = None
+_daily_last_sent = None
+
+
+def _schedule_daily_summary():
+    """Schedule the daily Telegram summary at the time set in DAILY_SUMMARY_TIME env var."""
+    global _daily_timer
+    summary_time = os.getenv("DAILY_SUMMARY_TIME", "").strip()
+    if not summary_time:
+        return
+    try:
+        h, m = map(int, summary_time.split(":"))
+    except Exception:
+        logger.error(f"Invalid DAILY_SUMMARY_TIME: {summary_time!r} — expected HH:MM")
+        return
+
+    now    = datetime.now()
+    target = now.replace(hour=h, minute=m, second=0, microsecond=0)
+    if target <= now:
+        target += timedelta(days=1)
+
+    delay  = (target - now).total_seconds()
+    _daily_timer = threading.Timer(delay, _fire_daily_summary)
+    _daily_timer.daemon = True
+    _daily_timer.start()
+    logger.info(f"Daily summary scheduled for {target.strftime('%Y-%m-%d %H:%M')}")
+
+
+def _fire_daily_summary():
+    """Execute the daily summary and reschedule for tomorrow."""
+    global _daily_last_sent
+    logger.info("Firing daily intelligence summary")
+    ok = trigger_daily_summary_now()
+    if ok:
+        _daily_last_sent = datetime.now().isoformat()
+    _schedule_daily_summary()
+
+
+def trigger_daily_summary_now() -> bool:
+    """Manually fire the daily summary — called from API or schedule."""
+    try:
+        from database import SessionLocal, get_all_asins
+        from sqlalchemy import text as sql_text
+        from alerts import send_daily_summary
+
+        db = SessionLocal()
+        try:
+            asins = get_all_asins(db)
+            products = [
+                {
+                    "asin": a.asin, "sku": a.sku, "title": a.title,
+                    "buybox_status": a.buybox_status, "buybox_price": a.buybox_price,
+                    "buybox_seller": a.buybox_seller, "my_price": a.my_price,
+                    "min_price": getattr(a, "min_price", None),
+                    "currency": a.currency or "R",
+                }
+                for a in asins
+            ]
+            rows = db.execute(
+                sql_text("SELECT asin, seller, price, status, timestamp FROM price_history ORDER BY timestamp DESC LIMIT 2000")
+            ).fetchall()
+            history = [
+                {"asin": r[0], "seller": r[1], "price": r[2], "status": r[3], "timestamp": r[4]}
+                for r in rows
+            ]
+        finally:
+            db.close()
+
+        return send_daily_summary(products, history)
+    except Exception as e:
+        logger.error(f"Daily summary error: {e}")
+        return False

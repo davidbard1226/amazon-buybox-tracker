@@ -77,6 +77,7 @@ class TrackedASIN(Base):
     # Cost data
     cost_price = Column(Float, nullable=True)
     cost_supplier = Column(String(255), nullable=True)
+    min_price = Column(Float, nullable=True)
 
 
 class PriceHistory(Base):
@@ -100,15 +101,28 @@ def init_db():
     try:
         Base.metadata.create_all(bind=engine)
         logger.info("Database tables initialized")
-        # Migration: add cost_price and cost_supplier columns if they don't exist
+        # Migration: add columns if they don't exist (PostgreSQL IF NOT EXISTS is safe to run repeatedly)
         with engine.connect() as conn:
-            for col, col_type in [("cost_price", "FLOAT"), ("cost_supplier", "VARCHAR(255)")]:
+            for col, col_type in [
+                ("cost_price",    "FLOAT"),
+                ("cost_supplier", "VARCHAR(255)"),
+                ("min_price",     "FLOAT"),
+            ]:
                 try:
-                    conn.execute(text(f"ALTER TABLE tracked_asins ADD COLUMN {col} {col_type}"))
+                    if "sqlite" in str(engine.url):
+                        # SQLite doesn't support IF NOT EXISTS on ALTER TABLE
+                        conn.execute(text(f"ALTER TABLE tracked_asins ADD COLUMN {col} {col_type}"))
+                    else:
+                        # PostgreSQL supports IF NOT EXISTS — safe to run every startup
+                        conn.execute(text(f"ALTER TABLE tracked_asins ADD COLUMN IF NOT EXISTS {col} {col_type}"))
                     conn.commit()
-                    logger.info(f"✅ Migration: added column '{col}' to tracked_asins")
-                except Exception:
-                    pass  # Column already exists — safe to ignore
+                    logger.info(f"✅ Migration: ensured column '{col}' exists in tracked_asins")
+                except Exception as ex:
+                    err_str = str(ex).lower()
+                    if "already exists" in err_str or "duplicate column" in err_str:
+                        pass  # Already there — fine
+                    else:
+                        logger.warning(f"Migration note for '{col}': {ex}")
     except Exception as e:
         logger.error(f"Database initialization failed: {e}")
         logger.error("⚠️  The app will start but data won't be saved until the DB is reachable.")

@@ -1280,6 +1280,171 @@ def test_telegram():
     )
     return {"success": success, "message": "Telegram test sent!" if success else "Failed to send Telegram alert"}
 
+
+@app.post("/api/alerts/daily-summary")
+def send_daily_summary_endpoint():
+    """Manually trigger the daily intelligence summary via Telegram."""
+    if not SCHEDULER_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Scheduler module not available")
+    try:
+        from scheduler import trigger_daily_summary_now
+        ok = trigger_daily_summary_now()
+        return {"success": ok, "message": "Daily summary sent!" if ok else "Failed — check Telegram settings on Render"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/intelligence")
+def get_intelligence(days: int = 7, db: Session = Depends(get_db)):
+    """Competitor intelligence endpoint — price changes, volatile ASINs, seller activity."""
+    from sqlalchemy import text as sql_text
+    from datetime import timedelta
+    from collections import Counter, defaultdict
+
+    cutoff = datetime.utcnow() - timedelta(days=days)
+
+    rows = db.execute(
+        sql_text("""
+            SELECT ph.asin, ph.seller, ph.price, ph.status, ph.timestamp,
+                   ta.sku, ta.title, ta.my_price, ta.cost_price, ta.buybox_status
+            FROM price_history ph
+            LEFT JOIN tracked_asins ta ON ta.asin = ph.asin
+            WHERE ph.timestamp >= :cutoff
+            ORDER BY ph.asin, ph.timestamp ASC
+        """),
+        {"cutoff": cutoff}
+    ).fetchall()
+
+    all_asins_rows = db.execute(
+        sql_text("""
+            SELECT asin, sku, title, buybox_status, buybox_price, buybox_seller,
+                   my_price, cost_price, currency, scraped_at
+            FROM tracked_asins ORDER BY updated_at DESC
+        """)
+    ).fetchall()
+
+    # Get min_price safely — it may not exist yet on first deploy
+    min_price_map = {}
+    try:
+        mp_rows = db.execute(sql_text("SELECT asin, min_price FROM tracked_asins")).fetchall()
+        min_price_map = {r[0]: r[1] for r in mp_rows}
+    except Exception:
+        pass
+
+    products = []
+    for r in all_asins_rows:
+        products.append({
+            "asin": r[0], "sku": r[1], "title": r[2],
+            "buybox_status": r[3], "buybox_price": r[4], "buybox_seller": r[5],
+            "my_price": r[6], "cost_price": r[7],
+            "min_price": min_price_map.get(r[0]),
+            "currency": r[8] or "R",
+            "scraped_at": r[9].isoformat() if r[9] else None,
+        })
+
+    win_at_loss = [
+        p for p in products
+        if p["buybox_status"] == "winning"
+        and p.get("my_price") and p.get("min_price")
+        and p["my_price"] < p["min_price"]
+    ]
+
+    asin_history = defaultdict(list)
+    for r in rows:
+        asin_history[r[0]].append({"seller": r[1], "price": r[2], "status": r[3], "ts": r[4]})
+
+    seller_stats  = defaultdict(lambda: {"wins": 0, "price_changes": 0, "undercuts": 0, "asins": set()})
+    asin_stats    = {}
+    price_movements = []
+    my_seller     = MY_SELLER_NAME.lower()
+
+    for asin, hist in asin_history.items():
+        asin_info = next((p for p in products if p["asin"] == asin), {})
+        sku       = asin_info.get("sku") or ""
+        title     = (asin_info.get("title") or asin)[:45]
+        my_price  = asin_info.get("my_price")
+        changes   = 0
+        sellers   = set()
+
+        for i in range(1, len(hist)):
+            prev, curr = hist[i-1], hist[i]
+            if prev["price"] and curr["price"] and prev["price"] != curr["price"]:
+                changes += 1
+                seller = curr["seller"] or "Unknown"
+                sellers.add(seller)
+                diff = (curr["price"] or 0) - (prev["price"] or 0)
+                price_movements.append({
+                    "asin": asin, "sku": sku, "title": title,
+                    "seller": seller, "prev_price": prev["price"],
+                    "price": curr["price"], "diff": round(diff, 2),
+                    "ts": curr["ts"].isoformat() if curr["ts"] else "",
+                })
+                if seller.lower() != my_seller:
+                    seller_stats[seller]["price_changes"] += 1
+                    seller_stats[seller]["asins"].add(asin)
+                    if my_price and curr["price"] and curr["price"] < my_price:
+                        seller_stats[seller]["undercuts"] += 1
+
+            if curr["seller"] and curr["seller"].lower() != my_seller and curr["status"] in ("losing", "amazon"):
+                seller_stats[curr["seller"]]["wins"] += 1
+                seller_stats[curr["seller"]]["asins"].add(asin)
+
+        if changes > 0:
+            asin_stats[asin] = {
+                "asin": asin, "sku": sku, "title": title,
+                "changes": changes, "competitor_count": len(sellers),
+            }
+
+    top_competitors = sorted(
+        [{"seller": k, "wins": v["wins"], "price_changes": v["price_changes"],
+          "undercuts": v["undercuts"], "asin_count": len(v["asins"])}
+         for k, v in seller_stats.items()],
+        key=lambda x: x["price_changes"] + x["wins"], reverse=True
+    )[:20]
+
+    volatile_asins = sorted(asin_stats.values(), key=lambda x: x["changes"], reverse=True)[:20]
+    price_movements_sorted = sorted(price_movements, key=lambda x: x["ts"], reverse=True)[:200]
+
+    return {
+        "days": days,
+        "summary": {
+            "total_products":      len(products),
+            "winning":             len([p for p in products if p["buybox_status"] == "winning"]),
+            "losing":              len([p for p in products if p["buybox_status"] == "losing"]),
+            "amazon":              len([p for p in products if p["buybox_status"] == "amazon"]),
+            "win_at_loss_count":   len(win_at_loss),
+            "total_price_changes": len(price_movements),
+            "unique_competitors":  len(seller_stats),
+        },
+        "win_at_loss":      win_at_loss[:20],
+        "top_competitors":  top_competitors,
+        "volatile_asins":   volatile_asins,
+        "price_movements":  price_movements_sorted,
+    }
+
+
+@app.post("/api/costs/update-min-price")
+def update_min_price_endpoint(req: dict, db: Session = Depends(get_db)):
+    """Update the min_price for a single ASIN."""
+    asin      = (req.get("asin") or "").strip().upper()
+    min_price = req.get("min_price")
+    if not asin or min_price is None:
+        raise HTTPException(status_code=400, detail="asin and min_price are required")
+    product = db.query(TrackedASIN).filter(TrackedASIN.asin == asin).first()
+    if not product:
+        raise HTTPException(status_code=404, detail=f"ASIN {asin} not found")
+    try:
+        from sqlalchemy import text as sql_text
+        db.execute(sql_text("UPDATE tracked_asins SET min_price = :mp WHERE asin = :asin"),
+                   {"mp": float(min_price), "asin": asin})
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    logger.info(f"Updated min_price for {asin}: {min_price}")
+    return {"success": True, "asin": asin, "min_price": min_price}
+
+
 @app.get("/api/scheduler/status")
 def scheduler_status():
     if not SCHEDULER_AVAILABLE:
