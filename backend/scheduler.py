@@ -3,7 +3,6 @@ Auto-refresh scheduler using Python built-in threading - no extra dependencies
 
 NOTE on Render.com: scheduler_settings.json won't persist across restarts.
 Set SCHEDULER_INTERVAL_HOURS and SCHEDULER_ENABLED as Render env vars instead.
-Set DAILY_SUMMARY_TIME (e.g. "08:00") to enable daily Telegram summary.
 """
 import os
 import json
@@ -63,10 +62,6 @@ def refresh_all_asins(db=None):
                 try:
                     old_status = a.buybox_status
                     new_data = get_amazon_buybox(a.asin, a.marketplace)
-                    # Carry over stored fields the scraper doesn't return
-                    new_data["sku"]       = a.sku
-                    new_data["my_price"]  = a.my_price
-                    new_data["min_price"] = a.min_price
                     save_asin(db_session, new_data)
                     save_price_history(db_session, new_data)
                     check_and_alert(old_status, new_data)
@@ -94,14 +89,14 @@ def start_scheduler():
     global _interval_hours, _enabled
     settings = load_scheduler_settings()
     _interval_hours = settings.get("interval_hours", 6.0)
+    # Default to DISABLED - we use Chrome Extension for scraping to avoid bot detection.
+    # Enable via SCHEDULER_ENABLED=true env var on Render if you want server-side auto-refresh.
     _enabled = settings.get("enabled", False)
     if _enabled:
         _schedule_next()
         logger.info(f"Scheduler started - runs every {_interval_hours} hours")
     else:
         logger.info("Scheduler disabled by default - using Chrome Extension for scraping")
-    # Always start daily summary if DAILY_SUMMARY_TIME is configured
-    _schedule_daily_summary()
 
 def stop_scheduler():
     global _timer
@@ -138,116 +133,3 @@ def get_scheduler_status() -> dict:
         "next_run": _next_run,
         "total_asins": total,
     }
-
-
-# ============================================================================
-# Daily Intelligence Summary
-# ============================================================================
-
-_daily_summary_timer = None
-_daily_summary_last_sent = None
-
-
-def _schedule_daily_summary():
-    """Schedule the next daily summary to fire at the configured time."""
-    global _daily_summary_timer
-    summary_time = os.getenv("DAILY_SUMMARY_TIME", "").strip()  # e.g. "08:00"
-    if not summary_time:
-        return  # Not configured — disabled
-
-    try:
-        h, m = map(int, summary_time.split(":"))
-    except Exception:
-        logger.error(f"Invalid DAILY_SUMMARY_TIME format: {summary_time!r} — expected HH:MM")
-        return
-
-    now = datetime.now()
-    target = now.replace(hour=h, minute=m, second=0, microsecond=0)
-    if target <= now:
-        target += timedelta(days=1)
-
-    delay_secs = (target - now).total_seconds()
-    _daily_summary_timer = threading.Timer(delay_secs, _fire_daily_summary)
-    _daily_summary_timer.daemon = True
-    _daily_summary_timer.start()
-    logger.info(f"Daily summary scheduled for {target.strftime('%Y-%m-%d %H:%M')}")
-
-
-def _fire_daily_summary():
-    """Run the daily summary and reschedule for tomorrow."""
-    global _daily_summary_last_sent
-    logger.info("Firing daily intelligence summary")
-    try:
-        from database import SessionLocal, get_all_asins
-        from sqlalchemy import text
-
-        db = SessionLocal()
-        try:
-            asins = get_all_asins(db)
-            products = [
-                {
-                    "asin": a.asin, "sku": a.sku, "title": a.title,
-                    "buybox_status": a.buybox_status, "buybox_price": a.buybox_price,
-                    "buybox_seller": a.buybox_seller, "my_price": a.my_price,
-                    "min_price": a.min_price, "currency": a.currency or "R",
-                }
-                for a in asins
-            ]
-            # Get recent price history
-            rows = db.execute(
-                text("SELECT asin, seller, price, status, timestamp FROM price_history ORDER BY timestamp DESC LIMIT 2000")
-            ).fetchall()
-            history = [
-                {"asin": r[0], "seller": r[1], "price": r[2], "status": r[3], "timestamp": r[4]}
-                for r in rows
-            ]
-        finally:
-            db.close()
-
-        from alerts import send_daily_summary
-        ok = send_daily_summary(products, history)
-        if ok:
-            _daily_summary_last_sent = datetime.now().isoformat()
-            logger.success("Daily summary sent successfully")
-        else:
-            logger.warning("Daily summary failed to send")
-    except Exception as e:
-        logger.error(f"Daily summary error: {e}")
-
-    # Reschedule for tomorrow same time
-    _schedule_daily_summary()
-
-
-def trigger_daily_summary_now() -> bool:
-    """Manually trigger the daily summary immediately (called from API endpoint)."""
-    try:
-        _fire_daily_summary.__wrapped__() if hasattr(_fire_daily_summary, '__wrapped__') else None
-    except Exception:
-        pass
-    # Just call directly without rescheduling
-    from database import SessionLocal, get_all_asins
-    from sqlalchemy import text
-    db = SessionLocal()
-    try:
-        asins = get_all_asins(db)
-        products = [
-            {
-                "asin": a.asin, "sku": a.sku, "title": a.title,
-                "buybox_status": a.buybox_status, "buybox_price": a.buybox_price,
-                "buybox_seller": a.buybox_seller, "my_price": a.my_price,
-                "min_price": a.min_price, "currency": a.currency or "R",
-            }
-            for a in asins
-        ]
-        rows = db.execute(
-            text("SELECT asin, seller, price, status, timestamp FROM price_history ORDER BY timestamp DESC LIMIT 2000")
-        ).fetchall()
-        history = [
-            {"asin": r[0], "seller": r[1], "price": r[2], "status": r[3], "timestamp": r[4]}
-            for r in rows
-        ]
-    finally:
-        db.close()
-
-    from alerts import send_daily_summary
-    return send_daily_summary(products, history)

@@ -142,161 +142,55 @@ def send_telegram_alert(bot_token: str, chat_id: str, message: str) -> bool:
 # Unified alert dispatcher
 # ============================================================================
 
-def build_alert_message(alert_type: str, new_data: dict, old_status: str = None) -> str:
-    """Build a rich alert message with ASIN, SKU, my price, gap, and repriced info."""
-    asin      = new_data.get("asin", "")
-    sku       = new_data.get("sku", "")
-    title     = new_data.get("title", asin)[:55]
-    price     = new_data.get("buybox_price") or 0
-    seller    = new_data.get("buybox_seller", "Unknown")
-    my_price  = new_data.get("my_price")
-    min_price = new_data.get("min_price")
-    currency  = new_data.get("currency", "R")
-
-    ref = f"SKU: {sku}" if sku else f"ASIN: {asin}"
-    gap_line = ""
-    if my_price and price:
-        gap = my_price - price
-        gap_line = f"\n📉 Gap: {currency}{abs(gap):.2f} {'above' if gap > 0 else 'below'} them"
-
-    if alert_type == "losing":
-        return (
-            f"🔴 <b>BuyBox LOST!</b>\n"
-            f"{title}\n"
-            f"🔖 {ref}\n\n"
-            f"💰 My price:    {currency}{my_price:.2f}\n" if my_price else
-            f"💰 My price:    —\n"
-            f"🏷 Their price: {currency}{price:.2f}\n"
-            f"{gap_line}\n"
-            f"🛒 Seller: {seller}"
-        )
-    elif alert_type == "winning":
-        return (
-            f"🟢 <b>BuyBox WON!</b>\n"
-            f"{title}\n"
-            f"🔖 {ref}\n\n"
-            f"💰 My price: {currency}{my_price:.2f}\n" if my_price else ""
-            f"✅ We hold the BuyBox"
-        )
-    elif alert_type == "amazon":
-        return (
-            f"🟡 <b>Amazon Took BuyBox</b>\n"
-            f"{title}\n"
-            f"🔖 {ref}\n\n"
-            f"🏷 Amazon price: {currency}{price:.2f}\n"
-            f"💰 My price: {currency}{my_price:.2f}" if my_price else ""
-        )
-    elif alert_type == "win_at_loss":
-        return (
-            f"⚠️ <b>Winning at a LOSS!</b>\n"
-            f"{title}\n"
-            f"🔖 {ref}\n\n"
-            f"💰 My price:   {currency}{my_price:.2f}\n"
-            f"🔻 Min floor:  {currency}{min_price:.2f}\n"
-            f"📉 Selling below cost — needs price update!"
-        )
-    return ""
-
-
 def check_and_alert(old_status: str, new_data: dict):
     """Check for a buybox status change and fire alerts on all configured channels."""
-    settings   = load_alert_settings()
+    settings = load_alert_settings()
     new_status = new_data.get("buybox_status", "unknown")
-    my_price   = new_data.get("my_price")
-    min_price  = new_data.get("min_price")
+
+    if old_status == new_status:
+        return
+
+    asin = new_data.get("asin", "")
+    title = new_data.get("title", asin)[:40]
+    price = new_data.get("buybox_price", 0)
+    seller = new_data.get("buybox_seller", "Unknown")
+    currency = new_data.get("currency", "R")
 
     message = None
-
-    # Win-at-loss check: winning but selling below min viable price
-    if new_status == "winning" and my_price and min_price and my_price < min_price:
-        message = build_alert_message("win_at_loss", new_data)
-
-    elif old_status != new_status:
-        if new_status == "losing" and settings.get("alert_losing"):
-            message = build_alert_message("losing", new_data, old_status)
-        elif new_status == "winning" and settings.get("alert_winning") and old_status != "winning":
-            message = build_alert_message("winning", new_data, old_status)
-        elif new_status == "amazon" and settings.get("alert_amazon"):
-            message = build_alert_message("amazon", new_data, old_status)
+    if new_status == "losing" and settings.get("alert_losing"):
+        message = (
+            f"🔴 LOSING BUYBOX\n"
+            f"{title}\n"
+            f"ASIN: {asin}\n"
+            f"Price: {currency}{price}\n"
+            f"Winner: {seller}"
+        )
+    elif new_status == "winning" and settings.get("alert_winning") and old_status != "winning":
+        message = (
+            f"🟢 YOU WON BUYBOX\n"
+            f"{title}\n"
+            f"ASIN: {asin}\n"
+            f"Price: {currency}{price}"
+        )
+    elif new_status == "amazon" and settings.get("alert_amazon"):
+        message = (
+            f"🟡 AMAZON TOOK BUYBOX\n"
+            f"{title}\n"
+            f"ASIN: {asin}\n"
+            f"Price: {currency}{price}"
+        )
 
     if not message:
         return
 
     # WhatsApp channel
-    phone  = settings.get("whatsapp_phone", "")
+    phone = settings.get("whatsapp_phone", "")
     apikey = settings.get("callmebot_apikey", "")
     if phone and apikey:
         send_whatsapp_alert(phone, apikey, message)
 
     # Telegram channel
     bot_token = settings.get("telegram_bot_token", "")
-    chat_id   = settings.get("telegram_chat_id", "")
+    chat_id = settings.get("telegram_chat_id", "")
     if bot_token and chat_id:
         send_telegram_alert(bot_token, chat_id, message)
-
-
-def send_daily_summary(products: list, price_history: list) -> bool:
-    """Build and send a daily intelligence summary via Telegram."""
-    settings  = load_alert_settings()
-    bot_token = settings.get("telegram_bot_token", "")
-    chat_id   = settings.get("telegram_chat_id", "")
-    if not bot_token or not chat_id:
-        logger.warning("Telegram not configured — skipping daily summary")
-        return False
-
-    from datetime import datetime, timedelta
-    from collections import Counter
-
-    wins    = [p for p in products if p.get("buybox_status") == "winning"]
-    losses  = [p for p in products if p.get("buybox_status") == "losing"]
-    amazon  = [p for p in products if p.get("buybox_status") == "amazon"]
-
-    # Win-at-loss
-    win_at_loss = [
-        p for p in wins
-        if p.get("my_price") and p.get("min_price") and p["my_price"] < p["min_price"]
-    ]
-
-    # Competitor frequency from recent price history (last 24h)
-    cutoff = datetime.utcnow() - timedelta(hours=24)
-    recent = [h for h in price_history if h.get("timestamp") and h["timestamp"] > cutoff]
-    seller_counts = Counter(h["seller"] for h in recent if h.get("seller") and h["seller"] != "BonoloOnline")
-    top_competitors = seller_counts.most_common(5)
-
-    # Most volatile ASINs
-    asin_counts = Counter(h["asin"] for h in recent)
-    top_volatile = asin_counts.most_common(5)
-    asin_map = {p["asin"]: p.get("sku") or p.get("title", "")[:30] for p in products}
-
-    now     = datetime.now()
-    datestr = now.strftime("%A, %d %B %Y")
-
-    msg = (
-        f"📊 <b>Amazon BuyBox Daily Summary</b>\n"
-        f"{datestr}\n\n"
-        f"🏆 <b>Performance</b>\n"
-        f"✅ Winning: {len(wins)}  ❌ Losing: {len(losses)}  🛒 Amazon: {len(amazon)}\n"
-        f"📦 Total tracked: {len(products)}\n"
-        f"📉 Price changes (24h): {len(recent)}\n"
-    )
-
-    if win_at_loss:
-        msg += f"\n⚠️ <b>Winning at a LOSS: {len(win_at_loss)} products</b>\n"
-        for p in win_at_loss[:5]:
-            ref = p.get("sku") or p.get("asin", "")
-            msg += f"  • [{ref}] R{p.get('my_price',0):.0f} &lt; min R{p.get('min_price',0):.0f}\n"
-
-    if top_competitors:
-        msg += "\n🔥 <b>Top Competitors (24h)</b>\n"
-        for i, (seller, count) in enumerate(top_competitors, 1):
-            msg += f"  {i}. {seller} — {count} changes\n"
-
-    if top_volatile:
-        msg += "\n🌡 <b>Most Volatile ASINs (24h)</b>\n"
-        for i, (asin, count) in enumerate(top_volatile, 1):
-            ref = asin_map.get(asin, asin)
-            msg += f"  {i}. [{asin}] {ref[:25]} — {count} changes\n"
-
-    msg += f"\n🕐 {now.strftime('%H:%M')} SAST"
-
-    return send_telegram_alert(bot_token, chat_id, msg)

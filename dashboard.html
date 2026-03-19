@@ -116,7 +116,6 @@ tr:hover td{background:rgba(255,255,255,0.02);}
       <button class="nav-btn" onclick="showPage('bulk')">📋 Bulk Upload</button>
       <button class="nav-btn" onclick="showPage('analytics')">📊 Analytics</button>
       <button class="nav-btn" onclick="showPage('settings')">⚙️ Settings</button>
-      <button class="nav-btn" onclick="showPage('intelligence')">🕵️ Intelligence</button>
     </div>
     <span id="backendBadge" class="badge badge-offline">⚫ Offline</span>
   </div>
@@ -148,7 +147,6 @@ tr:hover td{background:rgba(255,255,255,0.02);}
       <button class="filter-btn" onclick="setFilter('winning',this)">🏆 Winning</button>
       <button class="filter-btn" onclick="setFilter('losing',this)">😞 Losing</button>
       <button class="filter-btn" onclick="setFilter('amazon',this)">🛒 Amazon</button>
-      <button class="filter-btn" onclick="setFilter('win-at-loss',this)">⚠️ Win at Loss</button>
     </div>
     <div id="alertBox"></div>
     <div class="table-wrap">
@@ -406,59 +404,11 @@ tr:hover td{background:rgba(255,255,255,0.02);}
       <button class="btn" style="background:#1e293b;border:1px solid #10b981;color:#10b981;" onclick="runNow()">⚡ Refresh All Now</button>
     </div>
     <div id="schedulerMsg" style="margin-top:12px;"></div>
-
-    <div style="margin-top:20px;padding-top:18px;border-top:1px solid #334155">
-      <h3 style="font-size:1rem;margin-bottom:10px;color:#f1f5f9">📅 Daily Telegram Summary</h3>
-      <p style="color:#94a3b8;font-size:0.875rem;margin-bottom:12px">
-        Set <code style="background:#0f172a;padding:2px 6px;border-radius:4px;color:#f97316">DAILY_SUMMARY_TIME</code>
-        as a Render environment variable (e.g. <b>08:00</b>) to schedule automatic daily summaries.<br>
-        Or click the button below to send one immediately.
-      </p>
-      <button class="btn btn-primary btn-sm" onclick="sendDailySummaryNow()">📤 Send Daily Summary Now</button>
-    </div>
   </div>
 </div>
 
 </div><!-- end main -->
 </body>
-<!-- INTELLIGENCE PAGE -->
-<div id="page-intelligence" class="page">
-  <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px;flex-wrap:wrap">
-    <h2 style="margin:0">🕵️ Competitor Intelligence</h2>
-    <select id="intelDays" onchange="loadIntelligence()" style="background:#0f172a;border:1px solid #334155;color:#e2e8f0;padding:8px 12px;border-radius:6px;font-size:0.9rem">
-      <option value="1">Last 24h</option>
-      <option value="7" selected>Last 7 days</option>
-      <option value="14">Last 14 days</option>
-      <option value="30">Last 30 days</option>
-    </select>
-    <button class="btn btn-primary btn-sm" onclick="loadIntelligence()">🔄 Refresh</button>
-    <button class="btn btn-sm" style="background:#6366f1;color:#fff" onclick="sendDailySummaryNow()">📤 Send Daily Summary Now</button>
-    <div id="intelStatus" style="font-size:0.8rem;color:#94a3b8;margin-left:auto"></div>
-  </div>
-
-  <!-- Summary stats -->
-  <div class="stats-grid" id="intelStatsRow" style="margin-bottom:20px"></div>
-
-  <!-- Win at loss alert -->
-  <div id="intelWinAtLoss" style="margin-bottom:16px"></div>
-
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
-    <div class="card" style="margin:0">
-      <h2>🏆 Most Active Competitors</h2>
-      <div id="intelCompetitors"><div class="empty-state"><p>Loading...</p></div></div>
-    </div>
-    <div class="card" style="margin:0">
-      <h2>🔥 Most Volatile Products</h2>
-      <div id="intelVolatile"><div class="empty-state"><p>Loading...</p></div></div>
-    </div>
-  </div>
-
-  <div class="card" style="margin-bottom:16px">
-    <h2>📊 Price Movement Log</h2>
-    <div id="intelPriceLog" style="overflow-x:auto;max-height:400px;overflow-y:auto"></div>
-  </div>
-</div>
-
 <script>
 // Auto-detect API URL: use same host when deployed, fallback to localhost for local dev
 const API = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
@@ -481,172 +431,6 @@ function showPage(name) {
   if (name === 'dashboard') loadDashboard();
   if (name === 'analytics') loadAnalytics();
   if (name === 'settings') loadSettings();
-  if (name === 'intelligence') loadIntelligence();
-}
-
-// ── Intelligence Tab ─────────────────────────────────────────────
-async function loadIntelligence() {
-  const days = parseInt(document.getElementById('intelDays').value) || 7;
-  document.getElementById('intelStatus').textContent = '⏳ Loading...';
-  try {
-    const r = await fetch(API + `/api/intelligence?days=${days}`);
-    if (!r.ok) throw new Error('API error ' + r.status);
-    const d = await r.json();
-    renderIntelligence(d);
-    document.getElementById('intelStatus').textContent = `Last updated: ${new Date().toLocaleTimeString()}`;
-  } catch(e) {
-    document.getElementById('intelStatus').textContent = '❌ ' + e.message;
-  }
-}
-
-function renderIntelligence(d) {
-  const s = d.summary;
-  const cur = 'R';
-
-  // Stats row
-  document.getElementById('intelStatsRow').innerHTML = [
-    { val: s.total_price_changes, lbl: '📉 Price Changes', cls: 'val-price' },
-    { val: s.unique_competitors,  lbl: '🏆 Competitors',   cls: 'val-lose' },
-    { val: s.winning + '/' + s.total_products, lbl: '✅ Win Rate', cls: 'val-win' },
-    { val: s.win_at_loss_count,   lbl: '⚠️ Win at Loss',  cls: s.win_at_loss_count > 0 ? 'val-lose' : 'val-win' },
-  ].map(x => `
-    <div class="stat-card">
-      <div class="val ${x.cls}" style="font-size:2rem">${x.val}</div>
-      <div class="lbl">${x.lbl}</div>
-    </div>`).join('');
-
-  // Win-at-loss alert banner
-  const walEl = document.getElementById('intelWinAtLoss');
-  if (d.win_at_loss && d.win_at_loss.length > 0) {
-    walEl.innerHTML = `
-      <div class="alert alert-error">
-        <b>⚠️ ${d.win_at_loss.length} product(s) winning the BuyBox but selling BELOW min price (at a loss):</b>
-        <table style="width:100%;margin-top:10px;border-collapse:collapse;font-size:0.85rem">
-          <thead><tr style="color:#94a3b8;border-bottom:1px solid #334155">
-            <th style="text-align:left;padding:6px">ASIN</th>
-            <th style="text-align:left;padding:6px">SKU</th>
-            <th style="text-align:left;padding:6px;max-width:200px">Product</th>
-            <th style="text-align:right;padding:6px">My Price</th>
-            <th style="text-align:right;padding:6px">Min Price</th>
-            <th style="text-align:right;padding:6px">Loss</th>
-          </tr></thead><tbody>
-          ${d.win_at_loss.map(p => {
-            const loss = p.my_price && p.min_price ? (p.my_price - p.min_price).toFixed(2) : '—';
-            return `<tr style="border-bottom:1px solid #1e293b">
-              <td style="padding:6px;font-family:monospace;font-size:0.8rem">${p.asin}</td>
-              <td style="padding:6px;font-family:monospace;color:#818cf8">${p.sku || '—'}</td>
-              <td style="padding:6px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${(p.title||'').slice(0,40)}</td>
-              <td style="text-align:right;padding:6px;color:#ef4444">R${p.my_price?.toFixed(2)||'—'}</td>
-              <td style="text-align:right;padding:6px;color:#f97316">R${p.min_price?.toFixed(2)||'—'}</td>
-              <td style="text-align:right;padding:6px;color:#ef4444;font-weight:700">R${loss}</td>
-            </tr>`;
-          }).join('')}
-          </tbody>
-        </table>
-      </div>`;
-  } else {
-    walEl.innerHTML = '<div class="alert alert-success">✅ No products winning at a loss — all margins are healthy.</div>';
-  }
-
-  // Competitors table
-  const compEl = document.getElementById('intelCompetitors');
-  if (!d.top_competitors || !d.top_competitors.length) {
-    compEl.innerHTML = '<div class="empty-state"><p>No competitor data yet — scrape more products to build history.</p></div>';
-  } else {
-    compEl.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:0.85rem">
-      <thead><tr style="color:#94a3b8;font-size:0.75rem;text-transform:uppercase;border-bottom:1px solid #334155">
-        <th style="text-align:left;padding:7px">Seller</th>
-        <th style="text-align:right;padding:7px">BuyBox Wins</th>
-        <th style="text-align:right;padding:7px">Price Changes</th>
-        <th style="text-align:right;padding:7px">Undercuts</th>
-        <th style="text-align:right;padding:7px">ASINs</th>
-      </tr></thead><tbody>
-      ${d.top_competitors.map(c => {
-        const heat = c.price_changes > 10 ? '#ef4444' : c.price_changes > 4 ? '#f97316' : '#10b981';
-        return `<tr style="border-bottom:1px solid #1e293b">
-          <td style="padding:7px;font-weight:600">${c.seller}</td>
-          <td style="text-align:right;padding:7px;color:#ef4444;font-family:monospace">${c.wins}</td>
-          <td style="text-align:right;padding:7px;font-family:monospace;color:${heat};font-weight:700">${c.price_changes}</td>
-          <td style="text-align:right;padding:7px;color:#f472b6;font-family:monospace">${c.undercuts}</td>
-          <td style="text-align:right;padding:7px;color:#94a3b8">${c.asin_count}</td>
-        </tr>`;
-      }).join('')}
-      </tbody></table>`;
-  }
-
-  // Volatile ASINs
-  const volEl = document.getElementById('intelVolatile');
-  if (!d.volatile_asins || !d.volatile_asins.length) {
-    volEl.innerHTML = '<div class="empty-state"><p>No price changes in this period yet.</p></div>';
-  } else {
-    volEl.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:0.85rem">
-      <thead><tr style="color:#94a3b8;font-size:0.75rem;text-transform:uppercase;border-bottom:1px solid #334155">
-        <th style="text-align:left;padding:7px">Product</th>
-        <th style="text-align:left;padding:7px">ASIN / SKU</th>
-        <th style="text-align:right;padding:7px">Changes</th>
-        <th style="text-align:right;padding:7px">Competitors</th>
-      </tr></thead><tbody>
-      ${d.volatile_asins.map(a => {
-        const heat = a.changes > 10 ? '#ef4444' : a.changes > 4 ? '#f97316' : '#10b981';
-        return `<tr style="border-bottom:1px solid #1e293b">
-          <td style="padding:7px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${a.title}">${a.title}</td>
-          <td style="padding:7px;font-family:monospace;font-size:0.75rem;color:#818cf8">${a.sku || a.asin}</td>
-          <td style="text-align:right;padding:7px;font-family:monospace;font-weight:700;color:${heat}">${a.changes}</td>
-          <td style="text-align:right;padding:7px;color:#94a3b8">${a.competitor_count}</td>
-        </tr>`;
-      }).join('')}
-      </tbody></table>`;
-  }
-
-  // Price movement log
-  const logEl = document.getElementById('intelPriceLog');
-  if (!d.price_movements || !d.price_movements.length) {
-    logEl.innerHTML = '<div class="empty-state"><p>No price movements recorded yet.</p></div>';
-  } else {
-    logEl.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:0.82rem">
-      <thead><tr style="color:#94a3b8;font-size:0.75rem;text-transform:uppercase;border-bottom:1px solid #334155;position:sticky;top:0;background:#1e293b">
-        <th style="text-align:left;padding:7px">Time</th>
-        <th style="text-align:left;padding:7px">ASIN</th>
-        <th style="text-align:left;padding:7px">SKU</th>
-        <th style="text-align:left;padding:7px;max-width:160px">Product</th>
-        <th style="text-align:left;padding:7px">Seller</th>
-        <th style="text-align:right;padding:7px">Was</th>
-        <th style="text-align:right;padding:7px">Now</th>
-        <th style="text-align:right;padding:7px">Change</th>
-      </tr></thead><tbody>
-      ${d.price_movements.map(m => {
-        const col  = m.diff < 0 ? '#10b981' : '#ef4444';
-        const sign = m.diff > 0 ? '+' : '';
-        const t    = m.ts ? new Date(m.ts).toLocaleString('en-ZA', {dateStyle:'short', timeStyle:'short'}) : '—';
-        return `<tr style="border-bottom:1px solid #0f172a">
-          <td style="padding:6px;font-family:monospace;font-size:0.75rem;color:#94a3b8;white-space:nowrap">${t}</td>
-          <td style="padding:6px;font-family:monospace;font-size:0.75rem;color:#94a3b8">${m.asin}</td>
-          <td style="padding:6px;font-family:monospace;font-size:0.75rem;color:#818cf8">${m.sku || '—'}</td>
-          <td style="padding:6px;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${m.title}">${m.title}</td>
-          <td style="padding:6px;color:#f472b6">${m.seller}</td>
-          <td style="text-align:right;padding:6px;font-family:monospace;color:#94a3b8">R${m.prev_price?.toFixed(2)||'—'}</td>
-          <td style="text-align:right;padding:6px;font-family:monospace;font-weight:700">R${m.price?.toFixed(2)||'—'}</td>
-          <td style="text-align:right;padding:6px;font-family:monospace;color:${col}">${sign}R${Math.abs(m.diff||0).toFixed(2)}</td>
-        </tr>`;
-      }).join('')}
-      </tbody></table>`;
-  }
-}
-
-async function sendDailySummaryNow() {
-  const btn = event.target;
-  btn.disabled = true;
-  btn.textContent = '⏳ Sending...';
-  try {
-    const r = await fetch(API + '/api/alerts/daily-summary', { method: 'POST' });
-    const d = await r.json();
-    alert(d.success ? '✅ Daily summary sent to Telegram!' : '❌ Failed: ' + (d.message || 'Check Telegram settings'));
-  } catch(e) {
-    alert('❌ Error: ' + e.message);
-  } finally {
-    btn.disabled = false;
-    btn.textContent = '📤 Send Daily Summary Now';
-  }
 }
 
 // ── Health Check ─────────────────────────────────────────────────
@@ -745,9 +529,6 @@ function sortTable(col) {
 function renderTable() {
   const search = (document.getElementById('searchInput').value || '').toLowerCase();
   let data = allProducts.filter(p => {
-    if (currentFilter === 'win-at-loss') {
-      return p.buybox_status === 'winning' && p.my_price && p.min_price && p.my_price < p.min_price;
-    }
     if (currentFilter !== 'all' && p.buybox_status !== currentFilter) return false;
     if (search) {
       const hay = `${p.title||''} ${p.asin||''} ${p.buybox_seller||''}`.toLowerCase();
