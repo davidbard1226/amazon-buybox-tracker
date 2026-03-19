@@ -415,20 +415,21 @@ tr[id^="qr-"] td input{pointer-events:auto;position:relative;z-index:20;}
     <div class="form-row" style="margin-bottom:16px;">
       <div class="form-group" style="flex:1;">
         <label>Bot Token (from @BotFather)</label>
-        <input type="text" id="tgBotToken" placeholder="123456789:ABCdefGHIjklMNOpqrSTUvwxYZ" />
+        <input type="text" id="tgBotToken" placeholder="123456789:ABCdefGHIjklMNOpqrSTUvwxYZ" oninput="scheduleTgSave()" />
       </div>
       <div class="form-group" style="flex:1;">
         <label>Chat ID (your personal or group chat)</label>
-        <input type="text" id="tgChatId" placeholder="123456789 or -100123456789 for groups" />
+        <input type="text" id="tgChatId" placeholder="123456789 or -100123456789 for groups" oninput="scheduleTgSave()" />
         <button class="btn" style="margin-top:8px;background:#0f172a;border:1px solid #2563eb;color:#93c5fd;font-size:13px;padding:6px 14px;" onclick="fetchTelegramChatId()">🔍 Auto-Detect Chat ID</button>
         <div id="tgChatIdMsg" style="margin-top:6px;font-size:0.85rem;color:#94a3b8;">Paste your Bot Token above, send <b>/start</b> to your bot in Telegram, then click Auto-Detect.</div>
       </div>
     </div>
-    <div style="display:flex;gap:12px;">
+    <div style="display:flex;gap:12px;flex-wrap:wrap;">
       <button class="btn btn-primary" onclick="saveAlertSettings()">💾 Save Settings</button>
-      <button class="btn" style="background:#1e293b;border:1px solid #2563eb;color:#93c5fd;" onclick="testTelegram()">📤 Send Test Telegram</button>
+      <button class="btn" style="background:#1e293b;border:1px solid #2563eb;color:#93c5fd;" onclick="testTelegram()">📤 Test Telegram</button>
     </div>
     <div id="telegramSettingsMsg" style="margin-top:12px;"></div>
+    <div id="tgStatusPanel" style="margin-top:12px;background:#0f172a;border-radius:8px;padding:14px;font-family:monospace;font-size:0.82rem;line-height:2;display:none"></div>
   </div>
 
   <div class="card">
@@ -2059,6 +2060,7 @@ async function loadSettings() {
     if (d.alert_losing !== undefined) document.getElementById('alertLosing').checked = d.alert_losing;
     if (d.alert_winning !== undefined) document.getElementById('alertWinning').checked = d.alert_winning;
     if (d.alert_amazon !== undefined) document.getElementById('alertAmazon').checked = d.alert_amazon;
+    updateTgStatusPanel(d);
   } catch(e) {}
   loadSchedulerStatus();
 }
@@ -2103,6 +2105,7 @@ async function saveAlertSettings() {
     const d = await r.json();
     showAlert('alertSettingsMsg', '✅ Alert settings saved successfully!', 'success');
     showAlert('telegramSettingsMsg', '✅ Settings saved!', 'success');
+    updateTgStatusPanel(settings);
   } catch(e) {
     showAlert('alertSettingsMsg', '❌ Failed to save settings', 'error');
     showAlert('telegramSettingsMsg', '❌ Failed to save settings', 'error');
@@ -2672,6 +2675,37 @@ async function sendDailySummaryNow() {
   } finally {
     btn.disabled = false; btn.textContent = orig;
   }
+}
+
+
+// ── Telegram Status Panel ─────────────────────────────────────────
+function updateTgStatusPanel(settings) {
+  var el = document.getElementById('tgStatusPanel');
+  if (!el) return;
+  var token   = settings && settings.telegram_bot_token ? settings.telegram_bot_token : '';
+  var chatId  = settings && settings.telegram_chat_id  ? settings.telegram_chat_id  : '';
+  var losing  = settings && settings.alert_losing  !== false;
+  var winning = settings && settings.alert_winning !== false;
+  var amazon  = settings && settings.alert_amazon  !== false;
+
+  var lines = [];
+  lines.push(token  ? '<span style="color:#10b981">✅ Token saved (' + token.slice(0,8) + '...)</span>'  : '<span style="color:#ef4444">❌ No Bot Token saved</span>');
+  lines.push(chatId ? '<span style="color:#10b981">✅ Chat ID: ' + chatId + '</span>'                     : '<span style="color:#ef4444">❌ No Chat ID saved</span>');
+  lines.push('<span style="color:#94a3b8">Alerts: '
+    + (losing  ? '🔴 Losing ' : '') 
+    + (winning ? '🟢 Winning ' : '') 
+    + (amazon  ? '🛒 Amazon' : '')
+    + '</span>');
+
+  el.innerHTML = lines.join('<br>');
+  el.style.display = 'block';
+}
+
+// Auto-save debounce (saves 1.5s after user stops typing)
+var _tgSaveTimer = null;
+function scheduleTgSave() {
+  if (_tgSaveTimer) clearTimeout(_tgSaveTimer);
+  _tgSaveTimer = setTimeout(function() { saveAlertSettings(true); }, 1500);
 }
 
 checkHealth();
