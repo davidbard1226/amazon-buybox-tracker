@@ -145,29 +145,28 @@ def send_telegram_alert(bot_token: str, chat_id: str, message: str) -> bool:
 def build_alert_message(alert_type: str, new_data: dict, old_status: str = None) -> str:
     """Build a rich alert message with ASIN, SKU, my price, gap, and repriced info."""
     asin      = new_data.get("asin", "")
-    sku       = new_data.get("sku", "") or ""
-    title     = (new_data.get("title") or asin)[:55]
+    sku       = new_data.get("sku", "")
+    title     = new_data.get("title", asin)[:55]
     price     = new_data.get("buybox_price") or 0
-    seller    = new_data.get("buybox_seller") or "Unknown"
+    seller    = new_data.get("buybox_seller", "Unknown")
     my_price  = new_data.get("my_price")
     min_price = new_data.get("min_price")
-    currency  = new_data.get("currency") or "R"
+    currency  = new_data.get("currency", "R")
 
-    ref       = f"SKU: {sku}" if sku else f"ASIN: {asin}"
-    my_line   = f"💰 My price:    {currency}{my_price:.2f}" if my_price else "💰 My price:    —"
-    gap_line  = ""
+    ref = f"SKU: {sku}" if sku else f"ASIN: {asin}"
+    gap_line = ""
     if my_price and price:
-        gap      = my_price - price
-        direction = "above" if gap > 0 else "below"
-        gap_line  = f"\n📉 Gap: {currency}{abs(gap):.2f} {direction} them"
+        gap = my_price - price
+        gap_line = f"\n📉 Gap: {currency}{abs(gap):.2f} {'above' if gap > 0 else 'below'} them"
 
     if alert_type == "losing":
         return (
             f"🔴 <b>BuyBox LOST!</b>\n"
             f"{title}\n"
             f"🔖 {ref}\n\n"
-            f"{my_line}\n"
-            f"🏷 Their price: {currency}{price:.2f}"
+            f"💰 My price:    {currency}{my_price:.2f}\n" if my_price else
+            f"💰 My price:    —\n"
+            f"🏷 Their price: {currency}{price:.2f}\n"
             f"{gap_line}\n"
             f"🛒 Seller: {seller}"
         )
@@ -176,7 +175,7 @@ def build_alert_message(alert_type: str, new_data: dict, old_status: str = None)
             f"🟢 <b>BuyBox WON!</b>\n"
             f"{title}\n"
             f"🔖 {ref}\n\n"
-            f"{my_line}\n"
+            f"💰 My price: {currency}{my_price:.2f}\n" if my_price else ""
             f"✅ We hold the BuyBox"
         )
     elif alert_type == "amazon":
@@ -185,17 +184,16 @@ def build_alert_message(alert_type: str, new_data: dict, old_status: str = None)
             f"{title}\n"
             f"🔖 {ref}\n\n"
             f"🏷 Amazon price: {currency}{price:.2f}\n"
-            f"{my_line}"
+            f"💰 My price: {currency}{my_price:.2f}" if my_price else ""
         )
     elif alert_type == "win_at_loss":
-        min_str = f"{currency}{min_price:.2f}" if min_price else "—"
         return (
             f"⚠️ <b>Winning at a LOSS!</b>\n"
             f"{title}\n"
             f"🔖 {ref}\n\n"
-            f"{my_line}\n"
-            f"🔻 Min floor:  {min_str}\n"
-            f"📉 Selling below min price — needs price update!"
+            f"💰 My price:   {currency}{my_price:.2f}\n"
+            f"🔻 Min floor:  {currency}{min_price:.2f}\n"
+            f"📉 Selling below cost — needs price update!"
         )
     return ""
 
