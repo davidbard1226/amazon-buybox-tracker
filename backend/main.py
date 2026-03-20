@@ -1380,6 +1380,32 @@ def test_telegram():
     return {"success": success, "message": "Telegram test sent!" if success else "Failed to send Telegram alert"}
 
 
+@app.post("/api/alerts/test-real-alert")
+def test_real_alert():
+    """Fire a real simulated buybox-lost alert through the full check_and_alert pipeline."""
+    if not SCHEDULER_AVAILABLE:
+        raise HTTPException(status_code=503, detail="Alerts module not available")
+    from alerts import check_and_alert, _alert_throttle
+    # Temporarily clear throttle for the test ASIN so it fires immediately
+    _alert_throttle.pop("TEST0000TEST", None)
+    fake_data = {
+        "asin": "TEST0000TEST",
+        "title": "Test Product — Alert Pipeline Check",
+        "sku": "TEST-SKU-001",
+        "buybox_price": 299.99,
+        "buybox_seller": "CompetitorXYZ",
+        "buybox_status": "losing",
+        "my_price": 319.99,
+        "currency": "R",
+        "marketplace": "amazon.co.za",
+    }
+    try:
+        check_and_alert("winning", fake_data)  # simulate status change: winning → losing
+        return {"success": True, "message": "Real alert pipeline fired — check your Telegram now. If received, alerts are working end-to-end."}
+    except Exception as e:
+        return {"success": False, "message": str(e)}
+
+
 @app.post("/api/alerts/daily-summary")
 def send_daily_summary_endpoint():
     """Manually trigger the daily intelligence summary via Telegram."""

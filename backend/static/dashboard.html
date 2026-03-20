@@ -427,8 +427,9 @@ tr[id^="qr-"] td input{pointer-events:auto;position:relative;z-index:20;}
     <div style="display:flex;gap:12px;flex-wrap:wrap;">
       <button class="btn btn-primary" onclick="saveAlertSettings()">💾 Save Settings</button>
       <button class="btn" style="background:#1e293b;border:1px solid #2563eb;color:#93c5fd;" onclick="testTelegram()">📤 Test Telegram</button>
+      <button class="btn" style="background:#1e293b;border:1px solid #10b981;color:#10b981;" onclick="testRealAlert()">🔴 Test Real Alert</button>
       <button class="btn" style="background:#1e293b;border:1px solid #f59e0b;color:#f59e0b;" onclick="diagnoseTelegram()">🔍 Diagnose</button>
-      <button class="btn" style="background:#1e293b;border:1px solid #10b981;color:#10b981;" onclick="checkThrottle()">⏱ Throttle Status</button>
+      <button class="btn" style="background:#1e293b;border:1px solid #94a3b8;color:#94a3b8;" onclick="checkThrottle()">⏱ Throttle Status</button>
       <button class="btn" style="background:#1e293b;border:1px solid #ef4444;color:#ef4444;" onclick="resetThrottle()">🔄 Reset Throttle</button>
     </div>
     <div id="telegramSettingsMsg" style="margin-top:12px;"></div>
@@ -2210,6 +2211,19 @@ async function diagnoseTelegram() {
     }
   } catch(e) {
     panel.innerHTML = '❌ Could not reach backend: ' + e.message;
+  }
+}
+
+async function testRealAlert() {
+  showAlert('telegramSettingsMsg', '🔄 Firing real alert pipeline test...', 'info');
+  try {
+    const r = await fetch(API + '/api/alerts/test-real-alert', { method: 'POST' });
+    const d = await r.json();
+    showAlert('telegramSettingsMsg', d.success
+      ? '✅ ' + d.message
+      : '❌ ' + d.message, d.success ? 'success' : 'error');
+  } catch(e) {
+    showAlert('telegramSettingsMsg', '❌ Error: ' + e.message, 'error');
   }
 }
 
