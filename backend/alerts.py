@@ -27,9 +27,29 @@ Set these environment variables on Render for persistent alerts:
 import os
 import json
 import requests
+from datetime import datetime, timedelta
 from loguru import logger
 
 SETTINGS_FILE = "alert_settings.json"
+
+# ── Throttle: track last alert time per ASIN to avoid spam ───────────────────
+# { asin: { alert_type: datetime } }
+_alert_throttle: dict = {}
+THROTTLE_MINUTES = 60  # don't repeat same alert type for same ASIN within 60 min
+
+def _is_throttled(asin: str, alert_type: str) -> bool:
+    """Return True if this alert was already sent recently."""
+    key = _alert_throttle.get(asin, {})
+    last = key.get(alert_type)
+    if last and datetime.now() - last < timedelta(minutes=THROTTLE_MINUTES):
+        logger.info(f"Alert throttled: {asin} {alert_type} (sent {last.strftime('%H:%M')})")
+        return True
+    return False
+
+def _mark_sent(asin: str, alert_type: str):
+    if asin not in _alert_throttle:
+        _alert_throttle[asin] = {}
+    _alert_throttle[asin][alert_type] = datetime.now()
 
 
 def _bool_env(key: str, default: bool = True) -> bool:
@@ -186,38 +206,65 @@ def build_alert_message(alert_type: str, data: dict) -> str:
 # ============================================================================
 
 def check_and_alert(old_status: str, new_data: dict):
-    """Check for buybox status change and win-at-loss, then fire alerts."""
+    """Check for buybox status change and win-at-loss, then fire alerts with throttle."""
     settings   = load_alert_settings()
     new_status = new_data.get("buybox_status", "unknown")
+    asin       = new_data.get("asin", "")
     my_price   = new_data.get("my_price")
     min_price  = new_data.get("min_price")
 
-    message = None
+    bot_token = settings.get("telegram_bot_token", "")
+    chat_id   = settings.get("telegram_chat_id", "")
+    phone     = settings.get("whatsapp_phone", "")
+    apikey    = settings.get("callmebot_apikey", "")
 
-    # Win-at-loss: winning but price is below min viable floor
+    # Skip entirely if no alert channels configured
+    if not (bot_token and chat_id) and not (phone and apikey):
+        logger.debug(f"No alert channels configured — skipping alert for {asin}")
+        return
+
+    message    = None
+    alert_type = None
+
+    # ── Win-at-loss: winning but below floor price ────────────────────────────
     if new_status == "winning" and my_price and min_price and my_price < min_price:
-        message = build_alert_message("win_at_loss", new_data)
+        alert_type = "win_at_loss"
+        if not _is_throttled(asin, alert_type):
+            message = build_alert_message(alert_type, new_data)
 
-    elif old_status != new_status:
-        if new_status == "losing" and settings.get("alert_losing"):
-            message = build_alert_message("losing", new_data)
-        elif new_status == "winning" and settings.get("alert_winning") and old_status != "winning":
-            message = build_alert_message("winning", new_data)
-        elif new_status == "amazon" and settings.get("alert_amazon"):
-            message = build_alert_message("amazon", new_data)
+    # ── Status CHANGED — always alert regardless of throttle ─────────────────
+    elif old_status != new_status and new_status not in ("unknown", None):
+        if new_status == "losing" and settings.get("alert_losing", True):
+            alert_type = "losing"
+            message = build_alert_message(alert_type, new_data)
+        elif new_status == "winning" and settings.get("alert_winning", True):
+            alert_type = "winning"
+            message = build_alert_message(alert_type, new_data)
+        elif new_status == "amazon" and settings.get("alert_amazon", True):
+            alert_type = "amazon"
+            message = build_alert_message(alert_type, new_data)
+
+    # ── Status UNCHANGED but still losing — re-alert with throttle ───────────
+    elif old_status == new_status and new_status == "losing" and settings.get("alert_losing", True):
+        alert_type = "losing"
+        if not _is_throttled(asin, alert_type):
+            message = build_alert_message(alert_type, new_data)
 
     if not message:
         return
 
-    phone     = settings.get("whatsapp_phone", "")
-    apikey    = settings.get("callmebot_apikey", "")
-    bot_token = settings.get("telegram_bot_token", "")
-    chat_id   = settings.get("telegram_chat_id", "")
-
+    # Send to all configured channels
+    sent = False
     if phone and apikey:
-        send_whatsapp_alert(phone, apikey, message)
+        if send_whatsapp_alert(phone, apikey, message):
+            sent = True
     if bot_token and chat_id:
-        send_telegram_alert(bot_token, chat_id, message)
+        if send_telegram_alert(bot_token, chat_id, message):
+            sent = True
+
+    if sent and alert_type:
+        _mark_sent(asin, alert_type)
+        logger.info(f"Alert sent: {asin} → {alert_type}")
 
 
 # ============================================================================

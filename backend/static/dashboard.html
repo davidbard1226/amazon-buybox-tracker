@@ -427,8 +427,12 @@ tr[id^="qr-"] td input{pointer-events:auto;position:relative;z-index:20;}
     <div style="display:flex;gap:12px;flex-wrap:wrap;">
       <button class="btn btn-primary" onclick="saveAlertSettings()">💾 Save Settings</button>
       <button class="btn" style="background:#1e293b;border:1px solid #2563eb;color:#93c5fd;" onclick="testTelegram()">📤 Test Telegram</button>
+      <button class="btn" style="background:#1e293b;border:1px solid #f59e0b;color:#f59e0b;" onclick="diagnoseTelegram()">🔍 Diagnose</button>
+      <button class="btn" style="background:#1e293b;border:1px solid #10b981;color:#10b981;" onclick="checkThrottle()">⏱ Throttle Status</button>
+      <button class="btn" style="background:#1e293b;border:1px solid #ef4444;color:#ef4444;" onclick="resetThrottle()">🔄 Reset Throttle</button>
     </div>
     <div id="telegramSettingsMsg" style="margin-top:12px;"></div>
+    <div id="tgDiagnosePanel" style="display:none;margin-top:12px;background:#0f172a;border:1px solid #334155;border-radius:8px;padding:14px;font-family:monospace;font-size:0.82rem;line-height:1.8;"></div>
     <div id="tgStatusPanel" style="margin-top:12px;background:#0f172a;border-radius:8px;padding:14px;font-family:monospace;font-size:0.82rem;line-height:2;display:none"></div>
   </div>
 
@@ -2141,6 +2145,71 @@ async function fetchTelegramChatId() {
     }
   } catch(e) {
     document.getElementById('tgChatIdMsg').innerHTML = '<span style="color:#ef4444;">❌ Error: ' + e.message + '</span>';
+  }
+}
+
+async function checkThrottle() {
+  const panel = document.getElementById('tgDiagnosePanel');
+  panel.style.display = 'block';
+  panel.innerHTML = '⏳ Loading throttle status...';
+  try {
+    const r = await fetch(API + '/api/alerts/throttle-status');
+    const d = await r.json();
+    if (d.blocked_count === 0) {
+      panel.innerHTML = '<b style="color:#10b981;">✅ No throttle blocks active</b> — all alerts will fire on next scrape.<br><small style="color:#64748b;">Throttle window: ' + d.throttle_minutes + ' min per alert type per ASIN</small>';
+    } else {
+      let html = '<b style="color:#f59e0b;">⏱ ' + d.blocked_count + ' alert(s) currently throttled:</b><br><br>';
+      for (const [asin, types] of Object.entries(d.throttle)) {
+        for (const [type, info] of Object.entries(types)) {
+          html += '• <b>' + asin + '</b> [' + type + '] — sent at ' + info.sent_at + ', expires in <b>' + info.expires_in_min + ' min</b><br>';
+        }
+      }
+      html += '<br><small style="color:#64748b;">Click Reset Throttle to clear all blocks immediately</small>';
+      panel.innerHTML = html;
+    }
+  } catch(e) {
+    panel.innerHTML = '❌ Error: ' + e.message;
+  }
+}
+
+async function resetThrottle() {
+  try {
+    const r = await fetch(API + '/api/alerts/reset-throttle', { method: 'POST' });
+    const d = await r.json();
+    showAlert('telegramSettingsMsg', '✅ ' + d.message, 'success');
+    checkThrottle();
+  } catch(e) {
+    showAlert('telegramSettingsMsg', '❌ Reset failed: ' + e.message, 'error');
+  }
+}
+
+async function diagnoseTelegram() {
+  const panel = document.getElementById('tgDiagnosePanel');
+  panel.style.display = 'block';
+  panel.innerHTML = '⏳ Checking backend credentials...';
+  try {
+    const r = await fetch(API + '/api/alerts/diagnose');
+    const d = await r.json();
+    const envOk = d.env_vars_set;
+    panel.innerHTML =
+      '<b style="color:#f59e0b;">🔍 Telegram Diagnostics</b><br><br>' +
+      '<b>Bot Token:</b> ' + d.telegram_bot_token + '<br>' +
+      '<b>Chat ID:</b> ' + d.telegram_chat_id + '<br>' +
+      '<b>Token format valid:</b> ' + (d.telegram_token_format_ok ? '✅ Yes' : '❌ No — check for typos') + '<br>' +
+      '<b>Scheduler loaded:</b> ' + (d.scheduler_available ? '✅ Yes' : '❌ No') + '<br><br>' +
+      '<b style="color:#f59e0b;">Render Environment Variables:</b><br>' +
+      'TELEGRAM_BOT_TOKEN: ' + (envOk.TELEGRAM_BOT_TOKEN ? '✅ Set' : '❌ <b>NOT SET</b> — settings will be lost on restart!') + '<br>' +
+      'TELEGRAM_CHAT_ID: '   + (envOk.TELEGRAM_CHAT_ID   ? '✅ Set' : '❌ <b>NOT SET</b> — settings will be lost on restart!') + '<br><br>' +
+      '<span style="color:#94a3b8;">' + d.note + '</span>';
+    if (!envOk.TELEGRAM_BOT_TOKEN || !envOk.TELEGRAM_CHAT_ID) {
+      panel.innerHTML += '<br><br><b style="color:#ef4444;">⚠️ ACTION REQUIRED:</b><br>' +
+        'Go to <b>Render Dashboard → Your Service → Environment</b> and add:<br>' +
+        '<code>TELEGRAM_BOT_TOKEN</code> = your bot token<br>' +
+        '<code>TELEGRAM_CHAT_ID</code> = your chat ID<br>' +
+        'Then click <b>Save Changes</b> — Render will redeploy automatically.';
+    }
+  } catch(e) {
+    panel.innerHTML = '❌ Could not reach backend: ' + e.message;
   }
 }
 

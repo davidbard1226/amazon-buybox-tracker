@@ -64,7 +64,13 @@ def refresh_all_asins(db=None):
                     new_data = get_amazon_buybox(a.asin, a.marketplace)
                     save_asin(db_session, new_data)
                     save_price_history(db_session, new_data)
-                    check_and_alert(old_status, new_data)
+                    # Enrich with DB fields so alert messages have SKU, my_price, title
+                    enriched = dict(new_data)
+                    enriched.setdefault("sku", a.sku)
+                    enriched.setdefault("my_price", a.my_price)
+                    enriched.setdefault("title", a.title or new_data.get("title"))
+                    enriched.setdefault("cost_price", getattr(a, "cost_price", None))
+                    check_and_alert(old_status, enriched)
                     time.sleep(random.uniform(3, 6))
                 except Exception as e:
                     logger.error(f"Scheduler error for {a.asin}: {e}")

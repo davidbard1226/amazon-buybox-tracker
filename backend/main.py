@@ -682,9 +682,27 @@ def lookup_buybox(req: ASINRequest, db: Session = Depends(get_db)):
     asin = req.asin.strip().upper()
     if not asin:
         raise HTTPException(status_code=400, detail="ASIN is required")
-    data = get_amazon_buybox(asin, req.marketplace)
+    # Capture old status before overwriting
+    old_status = "unknown"
+    existing = db.query(TrackedASIN).filter(TrackedASIN.asin == asin).first()
+    if existing:
+        old_status = existing.buybox_status or "unknown"
+        # Enrich with DB fields for alert messages
+        data = get_amazon_buybox(asin, req.marketplace)
+        data.setdefault("sku", existing.sku)
+        data.setdefault("my_price", existing.my_price)
+        data.setdefault("cost_price", getattr(existing, "cost_price", None))
+    else:
+        data = get_amazon_buybox(asin, req.marketplace)
     save_asin(db, data)
     save_price_history(db, data)
+    # Fire alerts
+    if SCHEDULER_AVAILABLE and data.get("status") == "success":
+        try:
+            from alerts import check_and_alert
+            check_and_alert(old_status, data)
+        except Exception as ae:
+            logger.warning(f"Alert check failed for {asin}: {ae}")
     return data
 
 
@@ -845,8 +863,10 @@ def extension_scrape(data: dict):
         # Save to database
         db = SessionLocal()
         try:
+            old_status = "unknown"
             existing = db.query(TrackedASIN).filter(TrackedASIN.asin == asin).first()
             if existing:
+                old_status = existing.buybox_status or "unknown"
                 for key, value in db_data.items():
                     if key != "created_at" and hasattr(existing, key):
                         setattr(existing, key, value)
@@ -868,6 +888,21 @@ def extension_scrape(data: dict):
                     "buybox_seller": seller,
                     "buybox_status": buybox_status,
                 })
+
+            # Fire alerts — enrich with DB fields for better messages
+            if SCHEDULER_AVAILABLE:
+                try:
+                    alert_data = dict(db_data)
+                    alert_data["buybox_status"] = buybox_status
+                    if existing:
+                        alert_data.setdefault("sku", existing.sku)
+                        alert_data.setdefault("my_price", existing.my_price)
+                        alert_data.setdefault("title", existing.title or db_data.get("title"))
+                        alert_data.setdefault("cost_price", getattr(existing, "cost_price", None))
+                    from alerts import check_and_alert
+                    check_and_alert(old_status, alert_data)
+                except Exception as ae:
+                    logger.warning(f"Alert check failed for {asin}: {ae}")
 
             return {
                 "success": True,
@@ -1235,6 +1270,70 @@ def get_stats(db: Session = Depends(get_db)):
         "last_updated": datetime.now().isoformat()
     }
 
+
+@app.get("/api/alerts/throttle-status")
+def get_throttle_status():
+    """Show current alert throttle state — which ASINs are blocked from re-alerting."""
+    if not SCHEDULER_AVAILABLE:
+        return {"throttle": {}, "throttle_minutes": 60}
+    from alerts import _alert_throttle, THROTTLE_MINUTES
+    from datetime import datetime
+    result = {}
+    for asin, types in _alert_throttle.items():
+        result[asin] = {
+            t: {
+                "sent_at": ts.strftime("%H:%M:%S"),
+                "expires_in_min": max(0, round(THROTTLE_MINUTES - (datetime.now() - ts).total_seconds() / 60, 1))
+            }
+            for t, ts in types.items()
+        }
+    return {"throttle": result, "throttle_minutes": THROTTLE_MINUTES, "blocked_count": sum(len(v) for v in result.values())}
+
+@app.post("/api/alerts/reset-throttle")
+def reset_throttle():
+    """Clear all alert throttles — next scrape will re-fire all alerts."""
+    if not SCHEDULER_AVAILABLE:
+        return {"message": "Scheduler not available"}
+    from alerts import _alert_throttle
+    _alert_throttle.clear()
+    return {"message": "Throttle cleared — next scrape will fire all eligible alerts"}
+
+@app.get("/api/alerts/diagnose")
+def diagnose_alerts():
+    """Show exactly what credentials the backend has loaded — use this to debug Telegram."""
+    settings = load_alert_settings() if SCHEDULER_AVAILABLE else {}
+    bot_token = settings.get("telegram_bot_token", "")
+    chat_id   = settings.get("telegram_chat_id", "")
+    phone     = settings.get("whatsapp_phone", "")
+    apikey    = settings.get("callmebot_apikey", "")
+
+    # Mask secrets for safety
+    def mask(s):
+        if not s: return "❌ NOT SET"
+        if len(s) <= 6: return "✅ SET (too short to mask)"
+        return "✅ SET (" + s[:4] + "..." + s[-3:] + ")"
+
+    # Live-test Telegram token format validity
+    token_valid = bool(bot_token and ":" in bot_token and len(bot_token) > 20)
+
+    return {
+        "telegram_bot_token": mask(bot_token),
+        "telegram_chat_id":   mask(chat_id),
+        "whatsapp_phone":     mask(phone),
+        "callmebot_apikey":   mask(apikey),
+        "telegram_token_format_ok": token_valid,
+        "alert_losing":   settings.get("alert_losing",  True),
+        "alert_winning":  settings.get("alert_winning", True),
+        "alert_amazon":   settings.get("alert_amazon",  True),
+        "scheduler_available": SCHEDULER_AVAILABLE,
+        "env_vars_set": {
+            "TELEGRAM_BOT_TOKEN": bool(os.getenv("TELEGRAM_BOT_TOKEN")),
+            "TELEGRAM_CHAT_ID":   bool(os.getenv("TELEGRAM_CHAT_ID")),
+            "WHATSAPP_PHONE":     bool(os.getenv("WHATSAPP_PHONE")),
+            "CALLMEBOT_APIKEY":   bool(os.getenv("CALLMEBOT_APIKEY")),
+        },
+        "note": "Env vars survive Render restarts. Settings saved via UI are lost on restart unless env vars are set."
+    }
 
 @app.get("/api/alerts/settings")
 def get_alert_settings():
