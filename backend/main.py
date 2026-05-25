@@ -1230,8 +1230,12 @@ def bulk_url_lookup(req: BulkURLRequest, db: Session = Depends(get_db)):
 
 @app.get("/api/buybox/tracked")
 def get_tracked(db: Session = Depends(get_db)):
-    asins = get_all_asins(db)
-    return {"asins": [asin_to_dict(a) for a in asins], "count": len(asins)}
+    try:
+        asins = get_all_asins(db)
+        return {"asins": [asin_to_dict(a) for a in asins], "count": len(asins)}
+    except Exception as e:
+        logger.error(f"get_tracked error: {e}")
+        return {"asins": [], "count": 0, "error": str(e)}
 
 
 @app.get("/api/buybox/history/{asin}")

@@ -723,6 +723,9 @@ async function loadDashboard(isRetry) {
     allProducts = d.asins || [];
     _dashRetries = 0;
     clearAlert('alertBox');
+    if (d.error) {
+      showAlert('alertBox', `⚠️ Database error: ${d.error}<br><span style="font-size:0.85rem;color:#94a3b8">Check that DATABASE_URL is set correctly in your Render environment variables (use Supabase Session Pooler URL, port 6543).</span>`, 'error');
+    }
     updateStats();
     renderTable();
   } catch(e) {
