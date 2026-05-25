@@ -13,14 +13,34 @@ from loguru import logger
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./buybox_tracker.db")
 
-# Render/Supabase provide postgres:// but SQLAlchemy needs postgresql://
+# Normalize postgres:// → postgresql:// for SQLAlchemy
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
-# Supabase on Render.com: auto-switch port 5432 → 6543 (IPv4-safe pooler)
-if "supabase.co" in DATABASE_URL and ":5432/" in DATABASE_URL:
-    DATABASE_URL = DATABASE_URL.replace(":5432/", ":6543/")
-    logger.warning("Supabase direct port 5432 detected – auto-switching to pooler port 6543")
+# ── Supabase URL auto-repair ─────────────────────────────────────────────────
+# Supabase gives out three different connection strings and only one works with
+# SQLAlchemy on Render's free tier (IPv4-only).
+#
+# ❌ Direct connection  – port 5432, hostname: db.PROJECT.supabase.co   → IPv6, fails on Render free
+# ❌ Transaction pooler – port 6543, user: postgres.PROJECT              → no prepared statements
+# ✅ Session pooler     – port 5432, hostname: aws-X-REGION.pooler.supabase.com, user: postgres.PROJECT
+#
+# We detect the transaction-pooler pattern and rewrite to session-pooler.
+import re as _re
+_txn_pooler = _re.match(
+    r'(postgresql://)(postgres\.[^:]+):([^@]+)@([^:/]+pooler\.supabase\.com):6543/(.+)',
+    DATABASE_URL
+)
+if _txn_pooler:
+    # Transaction pooler detected – switch to session pooler (same host, port 5432)
+    user, password, host, db = _txn_pooler.group(2), _txn_pooler.group(3), _txn_pooler.group(4), _txn_pooler.group(5)
+    DATABASE_URL = f"postgresql://{user}:{password}@{host}:5432/{db}"
+    logger.warning("Supabase transaction pooler detected – switched to session pooler (port 5432)")
+
+# Old-style direct URL on port 5432 with db.PROJECT hostname → also try session pooler
+if "supabase.co" in DATABASE_URL and "db." in DATABASE_URL and ":5432/" in DATABASE_URL:
+    DATABASE_URL = _re.sub(r'db\.([^.]+)\.supabase\.co', r'aws-0-eu-west-1.pooler.supabase.com', DATABASE_URL)
+    logger.warning("Supabase direct connection detected – switched to session pooler")
 
 logger.info(f"Using database: {DATABASE_URL.split('@')[-1] if '@' in DATABASE_URL else DATABASE_URL}")
 
@@ -31,11 +51,9 @@ if "sqlite" in DATABASE_URL:
 else:
     from sqlalchemy.pool import NullPool
     clean_url = DATABASE_URL.split("?")[0]
-    # Render internal PostgreSQL doesn't require SSL; Supabase does
-    ssl_args = {"sslmode": "require"} if "supabase.co" in DATABASE_URL else {}
     engine = create_engine(
         clean_url,
-        connect_args={**ssl_args, "connect_timeout": 10},
+        connect_args={"sslmode": "require", "connect_timeout": 15},
         poolclass=NullPool,
         pool_pre_ping=False,
     )
