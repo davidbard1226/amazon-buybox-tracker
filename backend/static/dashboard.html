@@ -653,6 +653,7 @@ function showPage(name) {
 }
 
 // ── Health Check ─────────────────────────────────────────────────
+let _healthWasOffline = false;
 async function checkHealth() {
   try {
     const r = await fetch(API + '/api/health');
@@ -660,10 +661,18 @@ async function checkHealth() {
     const b = document.getElementById('backendBadge');
     b.textContent = '🟢 Backend Online';
     b.className = 'badge badge-online';
+    // If backend just came back online, cancel retry timer and reload products
+    if (_healthWasOffline) {
+      _healthWasOffline = false;
+      if (_dashRetryTimer) { clearTimeout(_dashRetryTimer); _dashRetryTimer = null; }
+      _dashRetries = 0;
+      loadDashboard();
+    }
   } catch(e) {
     const b = document.getElementById('backendBadge');
     b.textContent = '🔴 Backend Offline';
     b.className = 'badge badge-offline';
+    _healthWasOffline = true;
   }
 }
 
@@ -702,15 +711,39 @@ function showAlert(id, msg, type='info') {
 function clearAlert(id) { document.getElementById(id).innerHTML = ''; }
 
 // ── Load Dashboard ────────────────────────────────────────────────
-async function loadDashboard() {
+let _dashRetries = 0;
+let _dashRetryTimer = null;
+let _backendWasOffline = false;
+
+async function loadDashboard(isRetry) {
   try {
     const r = await fetch(API + '/api/buybox/tracked');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
     const d = await r.json();
     allProducts = d.asins || [];
+    _dashRetries = 0;
+    clearAlert('alertBox');
     updateStats();
     renderTable();
   } catch(e) {
-    showAlert('alertBox', '❌ Cannot connect to backend. If running locally, make sure the backend is running on port 8001. If deployed, the server may be starting up — please wait a moment and refresh.', 'error');
+    _dashRetries++;
+    const maxRetries = 10;
+    const delays = [3,5,8,12,18,25,35,45,60,90]; // seconds between retries
+    const delay = delays[Math.min(_dashRetries - 1, delays.length - 1)];
+    if (_dashRetries <= maxRetries) {
+      showAlert('alertBox',
+        `⏳ Connecting to backend… (attempt ${_dashRetries}/${maxRetries}, retrying in ${delay}s)<br>` +
+        `<span style="font-size:0.85rem;color:#94a3b8">The server may be waking up from sleep — this takes up to 60s on Render free tier.</span>`,
+        'info');
+      _dashRetryTimer = setTimeout(() => loadDashboard(true), delay * 1000);
+    } else {
+      showAlert('alertBox',
+        '❌ Cannot connect to backend after multiple attempts. ' +
+        (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+          ? 'Make sure the backend is running on port 8001.'
+          : 'The Render service may be down — check your Render dashboard or try refreshing.'),
+        'error');
+    }
   }
 }
 
@@ -2792,7 +2825,7 @@ function scheduleTgSave() {
 }
 
 checkHealth();
-setInterval(checkHealth, 30000);
+setInterval(checkHealth, 10000); // poll every 10s so we detect wake-up faster
 loadDashboard();
 </script>
 </html>
