@@ -17,31 +17,25 @@ DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./buybox_tracker.db")
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
-# ============================================================================
-# Supabase on Render.com: the direct connection (port 5432) uses IPv6 which
-# Render's free tier does NOT support → use the session pooler (port 6543)
-# which is IPv4-compatible. We auto-rewrite the URL if needed.
-# In your Supabase dashboard go to:
-#   Project Settings → Database → Connection pooling → Session mode → port 6543
-# Copy that connection string and set it as DATABASE_URL on Render.
-# ============================================================================
+# Supabase on Render.com: auto-switch port 5432 → 6543 (IPv4-safe pooler)
 if "supabase.co" in DATABASE_URL and ":5432/" in DATABASE_URL:
     DATABASE_URL = DATABASE_URL.replace(":5432/", ":6543/")
-    logger.warning("Supabase direct port 5432 detected – auto-switching to pooler port 6543 (IPv4-safe for Render.com)")
+    logger.warning("Supabase direct port 5432 detected – auto-switching to pooler port 6543")
 
 logger.info(f"Using database: {DATABASE_URL.split('@')[-1] if '@' in DATABASE_URL else DATABASE_URL}")
 
 connect_args = {"check_same_thread": False} if "sqlite" in DATABASE_URL else {}
 
-# For PostgreSQL via Supabase pooler, disable pre-ping and use conservative pool settings
 if "sqlite" in DATABASE_URL:
     engine = create_engine(DATABASE_URL, connect_args=connect_args)
 else:
     from sqlalchemy.pool import NullPool
     clean_url = DATABASE_URL.split("?")[0]
+    # Render internal PostgreSQL doesn't require SSL; Supabase does
+    ssl_args = {"sslmode": "require"} if "supabase.co" in DATABASE_URL else {}
     engine = create_engine(
         clean_url,
-        connect_args={"sslmode": "require", "connect_timeout": 10},
+        connect_args={**ssl_args, "connect_timeout": 10},
         poolclass=NullPool,
         pool_pre_ping=False,
     )
