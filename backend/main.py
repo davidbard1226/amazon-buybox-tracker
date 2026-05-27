@@ -15,7 +15,7 @@ import uuid
 import httpx
 from datetime import datetime
 from typing import List, Optional, Dict
-from fastapi import FastAPI, HTTPException, Depends, UploadFile, File
+from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -659,6 +659,11 @@ def health():
         "database_error": db_error,
         "version": "2.0.0"
     }
+
+@app.get("/api/keepalive")
+def keepalive():
+    """Lightweight ping endpoint — called by external cron to prevent Render free-tier sleep."""
+    return {"ok": True, "ts": datetime.now().isoformat()}
 
 
 def asin_to_dict(a: TrackedASIN) -> dict:
@@ -1592,11 +1597,32 @@ def update_scheduler(settings: SchedulerSettings, db: Session = Depends(get_db))
     return {"message": f"Scheduler updated - runs every {settings.interval_hours} hours", "enabled": settings.enabled}
 
 @app.post("/api/scheduler/run-now")
-def run_now(db: Session = Depends(get_db)):
+def run_now(background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     if not SCHEDULER_AVAILABLE:
         raise HTTPException(status_code=503, detail="Scheduler module not available")
-    refresh_all_asins(db)
+    background_tasks.add_task(refresh_all_asins, db)
     return {"message": "Manual refresh triggered for all tracked ASINs"}
+
+@app.post("/api/buybox/refresh-selected")
+def refresh_selected_asins(req: dict, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    """Trigger a server-side scrape for a specific list of ASINs."""
+    asins = [a.strip().upper() for a in (req.get("asins") or []) if a.strip()]
+    if not asins:
+        raise HTTPException(status_code=400, detail="No ASINs provided")
+    from scraper import scrape_buybox
+    def _scrape_selected(asin_list, session):
+        for asin in asin_list:
+            try:
+                product = session.query(TrackedASIN).filter(TrackedASIN.asin == asin).first()
+                if not product:
+                    continue
+                result = scrape_buybox(asin, product.marketplace or "amazon.co.za")
+                if result:
+                    update_asin_data(session, asin, result)
+            except Exception as e:
+                logger.warning(f"refresh-selected error for {asin}: {e}")
+    background_tasks.add_task(_scrape_selected, asins, db)
+    return {"message": f"Refresh triggered for {len(asins)} ASIN(s)", "asins": asins}
 
 GSHEET_ID = "1ISaEOPBElufeYh6eq6APtlFjeMvrKqlAwEd3F4K6rBw"
 

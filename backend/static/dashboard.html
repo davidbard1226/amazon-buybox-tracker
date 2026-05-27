@@ -130,10 +130,10 @@ tr[id^="qr-"] td input{pointer-events:auto;position:relative;z-index:20;}
 <!-- DASHBOARD PAGE -->
 <div id="page-dashboard" class="page active">
   <div class="stats-grid" id="statsGrid">
-    <div class="stat-card"><div class="val val-win" id="s-winning">0</div><div class="lbl">🏆 Winning</div></div>
-    <div class="stat-card"><div class="val val-lose" id="s-losing">0</div><div class="lbl">😞 Losing</div></div>
-    <div class="stat-card"><div class="val val-amazon" id="s-amazon">0</div><div class="lbl">🛒 Amazon Wins</div></div>
-    <div class="stat-card"><div class="val val-total" id="s-total">0</div><div class="lbl">📦 Total Tracked</div></div>
+    <div class="stat-card" onclick="setFilterById('winning')" title="Click to filter" style="cursor:pointer;transition:transform 0.15s,box-shadow 0.15s;" onmouseover="this.style.transform='translateY(-2px)';this.style.boxShadow='0 4px 16px rgba(16,185,129,0.2)'" onmouseout="this.style.transform='';this.style.boxShadow=''"><div class="val val-win" id="s-winning">0</div><div class="lbl">🏆 Winning</div><div style="font-size:0.7rem;color:#475569;margin-top:4px;">click to filter</div></div>
+    <div class="stat-card" onclick="setFilterById('losing')" title="Click to filter" style="cursor:pointer;transition:transform 0.15s,box-shadow 0.15s;" onmouseover="this.style.transform='translateY(-2px)';this.style.boxShadow='0 4px 16px rgba(239,68,68,0.2)'" onmouseout="this.style.transform='';this.style.boxShadow=''"><div class="val val-lose" id="s-losing">0</div><div class="lbl">😞 Losing</div><div style="font-size:0.7rem;color:#475569;margin-top:4px;">click to filter</div></div>
+    <div class="stat-card" onclick="setFilterById('amazon')" title="Click to filter" style="cursor:pointer;transition:transform 0.15s,box-shadow 0.15s;" onmouseover="this.style.transform='translateY(-2px)';this.style.boxShadow='0 4px 16px rgba(59,130,246,0.2)'" onmouseout="this.style.transform='';this.style.boxShadow=''"><div class="val val-amazon" id="s-amazon">0</div><div class="lbl">🛒 Amazon Wins</div><div style="font-size:0.7rem;color:#475569;margin-top:4px;">click to filter</div></div>
+    <div class="stat-card" onclick="setFilterById('all')" title="Click to show all" style="cursor:pointer;transition:transform 0.15s,box-shadow 0.15s;" onmouseover="this.style.transform='translateY(-2px)';this.style.boxShadow='0 4px 16px rgba(249,115,22,0.2)'" onmouseout="this.style.transform='';this.style.boxShadow=''"><div class="val val-total" id="s-total">0</div><div class="lbl">📦 Total Tracked</div><div style="font-size:0.7rem;color:#475569;margin-top:4px;">click to show all</div></div>
     <div class="stat-card"><div class="val val-price" id="s-avgprice">R0</div><div class="lbl">💰 Avg Buybox Price</div></div>
   </div>
 
@@ -144,6 +144,7 @@ tr[id^="qr-"] td input{pointer-events:auto;position:relative;z-index:20;}
         <span id="selectedCountBadge" style="display:none;font-size:0.8rem;background:#f97316;color:#fff;padding:3px 10px;border-radius:12px;font-weight:600;"></span>
         <button class="btn btn-sm" style="background:#334155;color:#e2e8f0;" id="refreshSelectedBtn" onclick="refreshSelected()" style="display:none;">🔄 Refresh Selected</button>
         <button class="btn btn-primary btn-sm" onclick="refreshAll()">🔄 Refresh All</button>
+        <button class="btn btn-sm" style="background:#1e293b;color:#94a3b8;border:1px solid #334155;" onclick="toggleColMenu(event)">🗂 Columns ▾</button>
         <button class="btn btn-sm" style="background:#1e3a5f;color:#93c5fd;border:1px solid #2563eb;" onclick="syncGSheet()">📊 Sync Costs</button>
         <button class="btn btn-sm" style="background:#064e3b;color:#6ee7b7;border:1px solid #10b981;" onclick="syncMyPricesGSheet()">💰 Sync My Prices</button>
         <button class="btn btn-sm" style="background:#1e1a4a;color:#c4b5fd;border:1px solid #7c3aed;" onclick="downloadPriceFile('all')" title="Download flat file for all products — upload to Seller Central">📥 Download All Prices</button>
@@ -152,6 +153,16 @@ tr[id^="qr-"] td input{pointer-events:auto;position:relative;z-index:20;}
     </div>
     <div class="search-bar">
       <input type="text" id="searchInput" placeholder="🔍 Search by title, ASIN or seller..." oninput="applyFilters()"/>
+    </div>
+
+    <!-- Column visibility dropdown -->
+    <div id="colMenu" style="display:none;position:absolute;z-index:999;background:#1e293b;border:1px solid #334155;border-radius:10px;padding:12px 16px;box-shadow:0 8px 32px rgba(0,0,0,0.5);min-width:220px;">
+      <div style="font-size:0.75rem;color:#64748b;font-weight:600;margin-bottom:8px;text-transform:uppercase;letter-spacing:0.05em;">Show / Hide Columns</div>
+      <div id="colCheckboxes" style="display:flex;flex-direction:column;gap:6px;"></div>
+      <div style="display:flex;gap:8px;margin-top:10px;padding-top:8px;border-top:1px solid #334155;">
+        <button onclick="setAllCols(true)" style="flex:1;padding:4px;font-size:0.75rem;background:#334155;color:#e2e8f0;border:none;border-radius:6px;cursor:pointer;">Show all</button>
+        <button onclick="setAllCols(false)" style="flex:1;padding:4px;font-size:0.75rem;background:#334155;color:#e2e8f0;border:none;border-radius:6px;cursor:pointer;">Hide optional</button>
+      </div>
     </div>
     <div class="filter-row" style="flex-wrap:wrap;gap:8px;align-items:center;">
       <span style="font-size:0.8rem;color:#94a3b8;align-self:center;">Status:</span>
@@ -182,7 +193,7 @@ tr[id^="qr-"] td input{pointer-events:auto;position:relative;z-index:20;}
     </div>
     <div class="table-wrap">
       <table id="productsTable">
-        <thead>
+        <thead id="productsHead">
           <tr>
             <th style="width:36px;"><input type="checkbox" id="selectAll" onchange="toggleSelectAll(this)" title="Select all" style="width:16px;height:16px;cursor:pointer;"/></th>
             <th></th>
@@ -192,11 +203,11 @@ tr[id^="qr-"] td input{pointer-events:auto;position:relative;z-index:20;}
             <th onclick="sortTable('cost_supplier')" style="cursor:pointer;">Supplier ↕</th>
             <th onclick="sortTable('my_price')" style="cursor:pointer;">My Price ↕</th>
             <th onclick="sortTable('cost_price')" style="cursor:pointer;">Cost ↕</th>
-            <th style="cursor:default;white-space:nowrap;">Profit (My Price) ↕</th>
+            <th style="cursor:default;white-space:nowrap;">Profit (My Price)</th>
             <th style="cursor:default;white-space:nowrap;color:#f59e0b;">💡 Profit if Match BB</th>
             <th onclick="sortTable('my_stock')" style="cursor:pointer;">Stock ↕</th>
-            <th style="cursor:default;white-space:nowrap;color:#ef4444;">🔻 Min Price (5%)</th>
-            <th style="cursor:default;white-space:nowrap;color:#10b981;">🔺 Max Price (20%)</th>
+            <th style="cursor:default;white-space:nowrap;color:#ef4444;">🔻 Min Price</th>
+            <th style="cursor:default;white-space:nowrap;color:#10b981;">🔺 Max Price</th>
             <th onclick="sortTable('buybox_price')" style="cursor:pointer;">Buybox Price ↕</th>
             <th onclick="sortTable('buybox_seller')" style="cursor:pointer;">Buybox Seller ↕</th>
             <th>Status</th>
@@ -652,6 +663,84 @@ function showPage(name) {
   if (name === 'pricing') loadPricingTab();
 }
 
+// ── Column Visibility ─────────────────────────────────────────────
+const COL_DEFS = [
+  { key: 'img',        label: 'Image',             default: true,  always: true  },
+  { key: 'title',      label: 'Product',            default: true,  always: true  },
+  { key: 'asin',       label: 'ASIN',               default: true,  always: true  },
+  { key: 'sku',        label: 'SKU',                default: true,  always: false },
+  { key: 'supplier',   label: 'Supplier',           default: false, always: false },
+  { key: 'my_price',   label: 'My Price',           default: true,  always: false },
+  { key: 'cost',       label: 'Cost',               default: false, always: false },
+  { key: 'profit',     label: 'Profit (My Price)',  default: false, always: false },
+  { key: 'profit_bb',  label: 'Profit if Match BB', default: false, always: false },
+  { key: 'stock',      label: 'Stock',              default: false, always: false },
+  { key: 'min_price',  label: 'Min Price',          default: false, always: false },
+  { key: 'max_price',  label: 'Max Price',          default: false, always: false },
+  { key: 'bb_price',   label: 'Buybox Price',       default: true,  always: true  },
+  { key: 'bb_seller',  label: 'Buybox Seller',      default: true,  always: true  },
+  { key: 'status',     label: 'Status',             default: true,  always: true  },
+  { key: 'last_check', label: 'Last Checked',       default: true,  always: false },
+  { key: 'actions',    label: 'Actions',            default: true,  always: true  },
+];
+
+let visibleCols = {};
+function _loadColPrefs() {
+  try {
+    const saved = localStorage.getItem('bbColVis');
+    if (saved) return JSON.parse(saved);
+  } catch(e) {}
+  const d = {};
+  COL_DEFS.forEach(c => d[c.key] = c.default);
+  return d;
+}
+function _saveColPrefs() {
+  try { localStorage.setItem('bbColVis', JSON.stringify(visibleCols)); } catch(e) {}
+}
+function _buildColCheckboxes() {
+  const container = document.getElementById('colCheckboxes');
+  if (!container) return;
+  container.innerHTML = COL_DEFS.map(c => `
+    <label style="display:flex;align-items:center;gap:8px;font-size:0.85rem;color:${c.always?'#64748b':'#e2e8f0'};cursor:${c.always?'default':'pointer'};">
+      <input type="checkbox" ${visibleCols[c.key]?'checked':''} ${c.always?'disabled':''} 
+        onchange="toggleCol('${c.key}',this.checked)"
+        style="width:14px;height:14px;cursor:${c.always?'default':'pointer'};" />
+      ${c.label}${c.always?' <span style="font-size:0.7rem;color:#475569;">(always)</span>':''}
+    </label>`).join('');
+}
+function toggleColMenu(e) {
+  e.stopPropagation();
+  const menu = document.getElementById('colMenu');
+  if (!menu) return;
+  if (menu.style.display === 'none') {
+    // Position near the button
+    const btn = e.currentTarget;
+    const r = btn.getBoundingClientRect();
+    menu.style.top = (r.bottom + window.scrollY + 6) + 'px';
+    menu.style.left = Math.max(8, r.right - 230 + window.scrollX) + 'px';
+    menu.style.display = 'block';
+    _buildColCheckboxes();
+  } else {
+    menu.style.display = 'none';
+  }
+}
+document.addEventListener('click', e => {
+  const menu = document.getElementById('colMenu');
+  if (menu && !menu.contains(e.target)) menu.style.display = 'none';
+});
+function toggleCol(key, val) {
+  visibleCols[key] = val;
+  _saveColPrefs();
+  renderTable();
+}
+function setAllCols(showAll) {
+  COL_DEFS.forEach(c => { if (!c.always) visibleCols[c.key] = showAll; });
+  _saveColPrefs();
+  _buildColCheckboxes();
+  renderTable();
+}
+visibleCols = _loadColPrefs();
+
 // ── Health Check ─────────────────────────────────────────────────
 let _healthWasOffline = false;
 async function checkHealth() {
@@ -773,6 +862,18 @@ function setFilter(f, btn) {
   renderTable();
 }
 
+// Called by stat cards — syncs the filter buttons too
+function setFilterById(f) {
+  currentFilter = f;
+  document.querySelectorAll('.filter-btn').forEach(b => {
+    const matches = (b.textContent.toLowerCase().includes(f) || (f === 'all' && b.textContent.trim() === 'All'));
+    b.classList.toggle('active', matches);
+  });
+  renderTable();
+  // Scroll down to the table
+  document.getElementById('productsTable') && document.getElementById('productsTable').scrollIntoView({behavior:'smooth', block:'nearest'});
+}
+
 function applyFilters() { renderTable(); }
 
 function sortTable(col) {
@@ -781,7 +882,43 @@ function sortTable(col) {
   renderTable();
 }
 
+// Maps col key → th index (0-based, including the checkbox col at 0)
+const COL_TH_INDEX = {
+  img:0, title:1, asin:2, sku:3, supplier:4, my_price:5, cost:6,
+  profit:7, profit_bb:8, stock:9, min_price:10, max_price:11,
+  bb_price:12, bb_seller:13, status:14, last_check:15, actions:16
+};
+// The checkbox <th> (col 0) is a separate cell — we never hide it
+// img is the second <th> (index 1 in the header row)
+
+function _applyColVisibility() {
+  const table = document.getElementById('productsTable');
+  if (!table) return;
+  // Build an ordered list of which column indices are visible
+  // Header row: [checkbox(always), img, title, asin, sku, supplier, my_price, cost, profit, profit_bb, stock, min_price, max_price, bb_price, bb_seller, status, last_check, actions]
+  // index:          0               1    2      3     4    5         6         7     8       9          10    11         12         13        14         15      16          17
+  const COL_TO_IDX = {
+    img:1, title:2, asin:3, sku:4, supplier:5, my_price:6, cost:7,
+    profit:8, profit_bb:9, stock:10, min_price:11, max_price:12,
+    bb_price:13, bb_seller:14, status:15, last_check:16, actions:17
+  };
+  // Apply to every row (thead and tbody)
+  const rows = table.querySelectorAll('tr');
+  rows.forEach(row => {
+    const cells = row.children;
+    COL_DEFS.forEach(col => {
+      const idx = COL_TO_IDX[col.key];
+      if (idx !== undefined && cells[idx]) {
+        cells[idx].style.display = visibleCols[col.key] ? '' : 'none';
+      }
+    });
+  });
+}
+
 function renderTable() {
+  // Apply column visibility to thead
+  _applyColVisibility();
+
   const search = (document.getElementById('searchInput').value || '').toLowerCase();
   const sellerF = (document.getElementById('sellerFilter') ? document.getElementById('sellerFilter').value : '');
   let data = allProducts.filter(p => {
@@ -934,7 +1071,7 @@ function renderTable() {
       <td style="font-size:0.8rem;color:#94a3b8;">${fmtTime(p.scraped_at)}</td>
       <td>
         <div style="display:flex;gap:6px;">
-          <button class="btn btn-primary btn-sm" title="Refresh via Extension" onclick="quickRefresh('${p.asin}','${p.marketplace}')">🔄</button>
+          <button class="btn btn-primary btn-sm" title="Refresh this product now (server-side)" onclick="_runBackendRefresh(['${p.asin}'])">🔄</button>
           <button class="btn btn-sm" style="background:#334155;color:#e2e8f0;" title="View Price History" onclick="viewHistory('${p.asin}')">📈</button>
           ${p.sku ? `<button class="btn btn-sm" style="background:#065f46;color:#6ee7b7;border:1px solid #10b981;" title="Push My Price to Amazon via SP-API" onclick="pushPrice('${p.asin}','${(p.sku||'').replace(/'/g,"\\'")}',${p.my_price||0})">💸 Push</button>` : ''}
           ${p.sku ? `<button class="btn btn-sm" style="background:#2d1a00;color:#fcd34d;border:1px solid #d97706;" title="Quick reprice: set price & download flat file" onclick="toggleQuickReprice('${p.asin}')">🤖 Reprice</button>` : ''}
@@ -943,7 +1080,7 @@ function renderTable() {
       </td>
     </tr>
     <tr id="qr-${p.asin}" style="display:none;background:#1a1200;pointer-events:auto;">
-      <td colspan="18" style="padding:10px 16px;pointer-events:auto;">
+      <td colspan="18" id="qr-cell-${p.asin}" style="padding:10px 16px;pointer-events:auto;">
         ${(() => {
           if (!p.sku) return '';
           const AMZN_FEE = 0.06;
@@ -976,6 +1113,8 @@ function renderTable() {
   const allChk = document.getElementById('selectAll');
   if (allChk) allChk.checked = data.length > 0 && data.every(p => selectedAsins.has(p.asin));
   updateSelectedBadge();
+  // Apply column visibility to newly rendered rows
+  _applyColVisibility();
 }
 
 // ── Checkbox selection ────────────────────────────────────────────
@@ -1013,46 +1152,85 @@ function changePageSize(val) { pageSize = val === 'all' ? 'all' : parseInt(val);
 function goPage(dir) { currentPage += dir; renderTable(); }
 function jumpPage(n) { currentPage = n; renderTable(); }
 
+// ── Backend bulk-scrape helpers ───────────────────────────────────
+let _refreshPollTimer = null;
+
+async function _runBackendRefresh(asins) {
+  // asins = [] means refresh ALL
+  const isAll = asins.length === 0;
+  const label = isAll ? 'all products' : `${asins.length} selected product(s)`;
+  const alertEl = 'alertBox';
+
+  // Clear any existing poll
+  if (_refreshPollTimer) { clearInterval(_refreshPollTimer); _refreshPollTimer = null; }
+
+  showAlert(alertEl, `<span class="loading"></span> Starting server-side refresh of ${label}…`, 'info');
+
+  try {
+    let resp, data;
+    if (isAll) {
+      // Trigger the scheduler's run-now endpoint
+      resp = await fetch(API + '/api/scheduler/run-now', { method: 'POST' });
+      data = await resp.json();
+    } else {
+      // Use bulk-add to trigger scrape for specific ASINs
+      resp = await fetch(API + '/api/buybox/refresh-selected', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ asins })
+      });
+      data = resp.ok ? await resp.json() : null;
+    }
+
+    // Poll the tracked endpoint every 8s and update stats/table as data comes in
+    let pollCount = 0;
+    const maxPolls = 30; // 30 × 8s = 4 min max
+    let prevScrapedCount = allProducts.filter(p => p.scraped_at).length;
+
+    _refreshPollTimer = setInterval(async () => {
+      pollCount++;
+      try {
+        const r2 = await fetch(API + '/api/buybox/tracked');
+        if (!r2.ok) return;
+        const d2 = await r2.json();
+        allProducts = d2.asins || [];
+        updateStats();
+        renderTable();
+
+        const nowScraped = allProducts.filter(p => p.scraped_at).length;
+        const total = isAll ? allProducts.length : asins.length;
+        const done = isAll
+          ? allProducts.filter(p => {
+              const t = new Date(p.scraped_at);
+              return !isNaN(t) && (Date.now() - t) < 5 * 60 * 1000;
+            }).length
+          : allProducts.filter(p => asins.includes(p.asin) && p.scraped_at &&
+              (Date.now() - new Date(p.scraped_at)) < 5 * 60 * 1000).length;
+
+        showAlert(alertEl,
+          `<span class="loading"></span> Refreshing ${label} — <b>${done}/${total}</b> updated so far… (auto-updates every 8s)`,
+          'info');
+
+        if (pollCount >= maxPolls) {
+          clearInterval(_refreshPollTimer); _refreshPollTimer = null;
+          showAlert(alertEl, `✅ Refresh complete. ${done} of ${total} products updated.`, 'success');
+          setTimeout(() => clearAlert(alertEl), 6000);
+        }
+      } catch(e) { /* keep polling */ }
+    }, 8000);
+
+  } catch(e) {
+    showAlert(alertEl, `❌ Refresh failed: ${e.message}`, 'error');
+  }
+}
+
 async function refreshSelected() {
   if (!selectedAsins.size) return;
-  const toRefresh = allProducts.filter(p => selectedAsins.has(p.asin));
-  const MAX_TABS = 3; // Limit to 3 tabs at a time to save memory
-  const SCRAPE_WAIT = 10000; // 10s per batch to complete scraping
-  
-  showAlert('alertBox', `<span class="loading"></span>Starting batch refresh of ${toRefresh.length} product(s) — Opening max ${MAX_TABS} background tabs at a time...`, 'info');
-  
-  let currentBatch = 0;
-  const totalBatches = Math.ceil(toRefresh.length / MAX_TABS);
-  
-  const openBatch = () => {
-    if (currentBatch >= totalBatches) {
-      showAlert('alertBox', '✅ All batches complete! Reloading dashboard...', 'success');
-      setTimeout(() => loadDashboard(), 3000);
-      return;
-    }
-    
-    const batchStart = currentBatch * MAX_TABS;
-    const batchEnd = Math.min(batchStart + MAX_TABS, toRefresh.length);
-    const batch = toRefresh.slice(batchStart, batchEnd);
-    
-    showAlert('alertBox', `<span class="loading"></span>Batch ${currentBatch + 1}/${totalBatches}: Opening ${batch.length} background tab(s)... (${batchEnd}/${toRefresh.length} total)`, 'info');
-    
-    // Open all tabs in this batch in a SEPARATE window (not in dashboard window)
-    batch.forEach((p, index) => {
-      setTimeout(() => {
-        const domain = (p.marketplace || 'amazon.co.za').replace('www.','');
-        const url = `https://www.${domain}/dp/${p.asin}?auto_scrape=1`;
-        // Open in separate popup window with specific name so tabs group together
-        window.open(url, 'AmazonScraper', 'width=800,height=600,location=yes,scrollbars=yes');
-      }, index * 1000); // 1s delay between each tab in the batch
-    });
-    
-    currentBatch++;
-    // Wait for batch to complete scraping before opening next batch
-    setTimeout(openBatch, SCRAPE_WAIT);
-  };
-  
-  openBatch();
+  await _runBackendRefresh([...selectedAsins]);
+}
+
+async function refreshAll() {
+  await _runBackendRefresh([]);
 }
 
 // ── Google Sheet Cost Sync ────────────────────────────────────────
@@ -1185,48 +1363,6 @@ function quickRefresh(asin, market) {
       showAlert('alertBox', `⚠️ Timeout for ${asin}. Make sure: 1) Extension is installed & enabled, 2) Backend URL is set in extension Settings tab, 3) Allow pop-ups for this site.`, 'error');
     }
   }, 3000);
-}
-
-async function refreshAll() {
-  if (!allProducts.length) { showAlert('alertBox', '⚠️ No products tracked yet.', 'error'); return; }
-  
-  const MAX_TABS = 3; // Limit to 3 tabs at a time to save memory
-  const SCRAPE_WAIT = 10000; // 10s per batch to complete scraping
-  
-  showAlert('alertBox', `<span class="loading"></span>Starting batch refresh of all ${allProducts.length} products — Opening max ${MAX_TABS} background tabs at a time...`, 'info');
-  
-  let currentBatch = 0;
-  const totalBatches = Math.ceil(allProducts.length / MAX_TABS);
-  
-  const openBatch = () => {
-    if (currentBatch >= totalBatches) {
-      showAlert('alertBox', '✅ All batches complete! Reloading dashboard...', 'success');
-      setTimeout(() => loadDashboard(), 3000);
-      return;
-    }
-    
-    const batchStart = currentBatch * MAX_TABS;
-    const batchEnd = Math.min(batchStart + MAX_TABS, allProducts.length);
-    const batch = allProducts.slice(batchStart, batchEnd);
-    
-    showAlert('alertBox', `<span class="loading"></span>Batch ${currentBatch + 1}/${totalBatches}: Opening ${batch.length} background tab(s)... (${batchEnd}/${allProducts.length} total)`, 'info');
-    
-    // Open all tabs in this batch in a SEPARATE window (not in dashboard window)
-    batch.forEach((p, index) => {
-      setTimeout(() => {
-        const domain = (p.marketplace || 'amazon.co.za').replace('www.','');
-        const url = `https://www.${domain}/dp/${p.asin}?auto_scrape=1&dashboard=${encodeURIComponent(window.location.origin)}`;
-        // Open in separate popup window with specific name so tabs group together
-        window.open(url, 'AmazonScraper', 'width=800,height=600,location=yes,scrollbars=yes');
-      }, index * 1000); // 1s delay between each tab in the batch
-    });
-    
-    currentBatch++;
-    // Wait for batch to complete scraping before opening next batch
-    setTimeout(openBatch, SCRAPE_WAIT);
-  };
-  
-  openBatch();
 }
 
 // ── Reprice Modal ─────────────────────────────────────────────────
