@@ -62,8 +62,23 @@ def refresh_all_asins(db=None):
                 try:
                     old_status = a.buybox_status
                     new_data = get_amazon_buybox(a.asin, a.marketplace)
+
+                    # Fix #6 — never overwrite good data with a failed/blocked scrape
+                    skip = (
+                        new_data.get("_skip_save") or
+                        new_data.get("status") in ("error", "blocked") or
+                        (not new_data.get("buybox_seller") and not new_data.get("buybox_price"))
+                    )
+                    if skip:
+                        reason = new_data.get("error") or new_data.get("status", "unknown")
+                        logger.warning(f"Scheduler: skipping save for {a.asin} — {reason}")
+                        time.sleep(random.uniform(3, 6))
+                        continue
+
                     save_asin(db_session, new_data)
-                    save_price_history(db_session, new_data)
+                    if new_data.get("buybox_price"):
+                        save_price_history(db_session, new_data)
+
                     # Enrich with DB fields so alert messages have SKU, my_price, title
                     enriched = dict(new_data)
                     enriched.setdefault("sku", a.sku)
