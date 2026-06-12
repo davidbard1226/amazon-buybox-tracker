@@ -1073,7 +1073,7 @@ function renderTable() {
       <td style="font-size:0.8rem;color:#94a3b8;">${fmtTime(p.scraped_at)}</td>
       <td>
         <div style="display:flex;gap:6px;">
-          <button class="btn btn-primary btn-sm" title="Refresh this product now (server-side)" onclick="_runBackendRefresh(['${p.asin}'])">🔄</button>
+          <button class="btn btn-primary btn-sm" title="Refresh this product via Chrome Extension" onclick="quickRefresh('${p.asin}','${p.marketplace}')">🔄</button>
           <button class="btn btn-sm" style="background:#334155;color:#e2e8f0;" title="View Price History" onclick="viewHistory('${p.asin}')">📈</button>
           ${p.sku ? `<button class="btn btn-sm" style="background:#065f46;color:#6ee7b7;border:1px solid #10b981;" title="Push My Price to Amazon via SP-API" onclick="pushPrice('${p.asin}','${(p.sku||'').replace(/'/g,"\\'")}',${p.my_price||0})">💸 Push</button>` : ''}
           ${p.sku ? `<button class="btn btn-sm" style="background:#2d1a00;color:#fcd34d;border:1px solid #d97706;" title="Quick reprice: set price & download flat file" onclick="toggleQuickReprice('${p.asin}')">🤖 Reprice</button>` : ''}
