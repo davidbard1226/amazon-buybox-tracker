@@ -142,8 +142,8 @@ tr[id^="qr-"] td input{pointer-events:auto;position:relative;z-index:20;}
       <h2>📋 Tracked Products</h2>
       <div style="display:flex;gap:8px;align-items:center;">
         <span id="selectedCountBadge" style="display:none;font-size:0.8rem;background:#f97316;color:#fff;padding:3px 10px;border-radius:12px;font-weight:600;"></span>
-        <button class="btn btn-sm" style="background:#334155;color:#e2e8f0;" id="refreshSelectedBtn" onclick="refreshSelected()" style="display:none;">🔄 Refresh Selected</button>
-        <button class="btn btn-primary btn-sm" onclick="refreshAll()">🔄 Refresh All</button>
+        <button class="btn btn-sm" style="background:#334155;color:#e2e8f0;" id="refreshSelectedBtn" onclick="_openScrapeWindow();refreshSelected()" style="display:none;">🔄 Refresh Selected</button>
+        <button class="btn btn-primary btn-sm" onclick="_openScrapeWindow();refreshAll()">🔄 Refresh All</button>
         <button class="btn btn-sm" style="background:#1e293b;color:#94a3b8;border:1px solid #334155;" onclick="toggleColMenu(event)">🗂 Columns ▾</button>
         <button class="btn btn-sm" style="background:#1e3a5f;color:#93c5fd;border:1px solid #2563eb;" onclick="syncGSheet()">📊 Sync Costs</button>
         <button class="btn btn-sm" style="background:#064e3b;color:#6ee7b7;border:1px solid #10b981;" onclick="syncMyPricesGSheet()">💰 Sync My Prices</button>
@@ -1226,6 +1226,13 @@ async function _runBackendRefresh(asins) {
   }
 }
 
+let _scrapeWin = null;
+function _openScrapeWindow() {
+  if (_scrapeWin && !_scrapeWin.closed) return _scrapeWin;
+  _scrapeWin = window.open('about:blank', 'buybox_scrape_win', 'width=1,height=1,left=-10,top=-10');
+  return _scrapeWin;
+}
+
 async function refreshSelected() {
   if (!selectedAsins.size) return;
   const asins = [...selectedAsins];
@@ -1237,7 +1244,8 @@ async function refreshSelected() {
     baseline[a] = p ? p.scraped_at : null;
   });
 
-  const scrapeWin = window.open('about:blank', 'buybox_scrape_win', 'width=1,height=1,left=-10,top=-10');
+  // Open popup window synchronously — must happen in user gesture context
+  const scrapeWin = _scrapeWin;
   if (!scrapeWin) { showAlert('alertBox', 'Popup blocked! Allow popups for this site and try again.', 'error'); return; }
 
   showAlert('alertBox', '<span class="loading"></span>Opening ' + asins.length + ' tabs in parallel (' + PARALLEL + ' at a time)...', 'info');
@@ -1275,7 +1283,7 @@ async function refreshAll() {
   const baseline = {};
   allProducts.forEach(p => { baseline[p.asin] = p.scraped_at; });
 
-  const scrapeWin = window.open('about:blank', 'buybox_scrape_win', 'width=1,height=1,left=-10,top=-10');
+  const scrapeWin = _scrapeWin;
   if (!scrapeWin) { showAlert('alertBox', 'Popup blocked! Allow popups for this site and try again.', 'error'); return; }
 
   showAlert('alertBox', '<span class="loading"></span>Opening ' + asins.length + ' tabs in parallel (' + PARALLEL + ' at a time)...', 'info');
