@@ -8,7 +8,6 @@ import random
 import os
 import re
 import io
-import json
 import csv
 import requests
 import threading
@@ -139,14 +138,13 @@ def _run_bulk_job(job_id: str, asins: List[str], marketplace: str):
     logger.info(f"[job {job_id}] Finished: {len(results)} ok, {len(failed)} failed")
 
 # ============================================================================
-# Amazon Scraper — amazon.co.za focused
+# Amazon Scraper
 # ============================================================================
 
-# Fix #7 — Updated UA strings to current browser versions (2025)
 HEADERS_LIST = [
-    {   # Chrome 124 Windows — primary
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Accept-Language": "en-ZA,en-GB;q=0.9,en-US;q=0.8,en;q=0.7",
+    {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept-Language": "en-GB,en-US;q=0.9,en;q=0.8",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
         "Accept-Encoding": "gzip, deflate, br",
         "Connection": "keep-alive",
@@ -157,84 +155,51 @@ HEADERS_LIST = [
         "Sec-Fetch-User": "?1",
         "Cache-Control": "max-age=0",
     },
-    {   # Chrome 124 Windows — variant with ZA locale
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.82 Safari/537.36",
-        "Accept-Language": "en-ZA,en;q=0.9",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15",
+        "Accept-Language": "en-GB,en;q=0.9",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Encoding": "gzip, deflate, br",
         "Connection": "keep-alive",
         "Upgrade-Insecure-Requests": "1",
+    },
+    {
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
         "Sec-Fetch-Dest": "document",
         "Sec-Fetch-Mode": "navigate",
         "Sec-Fetch-Site": "none",
-        "Sec-Fetch-User": "?1",
-        "Cache-Control": "no-cache",
+        "Upgrade-Insecure-Requests": "1",
     },
-    {   # Firefox 125 Windows
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
-        "Accept-Language": "en-ZA,en-GB;q=0.8,en;q=0.5",
+    {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0",
+        "Accept-Language": "en-US,en;q=0.5",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
         "Accept-Encoding": "gzip, deflate, br",
         "Connection": "keep-alive",
         "Upgrade-Insecure-Requests": "1",
         "DNT": "1",
-        "Sec-Fetch-Dest": "document",
-        "Sec-Fetch-Mode": "navigate",
-        "Sec-Fetch-Site": "none",
-    },
-    {   # Chrome 123 Mac — looks like a ZA user on Mac
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-        "Accept-Language": "en-ZA,en-GB;q=0.9,en;q=0.8",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Connection": "keep-alive",
-        "Upgrade-Insecure-Requests": "1",
-        "Sec-Fetch-Dest": "document",
-        "Sec-Fetch-Mode": "navigate",
-        "Sec-Fetch-Site": "none",
-        "Sec-Fetch-User": "?1",
-    },
+    }
 ]
-
-# Fix #4 — Persistent session reused across scrapes, refreshed every 20 uses
-_scrape_session = None
-_scrape_session_uses = 0
-_SCRAPE_SESSION_MAX = 20
-
-def _get_scrape_session() -> requests.Session:
-    """Return a warm requests.Session, rotating every 20 uses to stay fresh."""
-    global _scrape_session, _scrape_session_uses
-    if _scrape_session is None or _scrape_session_uses >= _SCRAPE_SESSION_MAX:
-        _scrape_session = requests.Session()
-        _scrape_session_uses = 0
-        # Warm the session with a lightweight homepage hit so cookies are set
-        try:
-            _scrape_session.get(
-                "https://www.amazon.co.za",
-                headers=random.choice(HEADERS_LIST),
-                timeout=10,
-                allow_redirects=True,
-            )
-            time.sleep(random.uniform(1.0, 2.0))
-        except Exception:
-            pass
-    _scrape_session_uses += 1
-    return _scrape_session
 
 
 def parse_price(raw: str) -> float:
-    """Parse ZAR price string — handles R1 660,00 and R1,660.00 formats."""
+    """Parse price string handling multiple formats including SA (R1 660,00), UK (£53.48), US ($12.99)."""
     if not raw:
         return None
-    cleaned = raw.replace("\xa0", "").replace("\u202f", "").strip()
-    # Strip currency symbol
-    cleaned = re.sub(r'^[R£$€]', '', cleaned).strip()
-    # SA format: 1 660,00 (space thousands separator, comma decimal)
+    # Remove currency symbols and non-breaking spaces
+    cleaned = raw.replace("\xa0", "").replace("\u202f", "")
+    cleaned = cleaned.replace("R", "").replace("£", "").replace("$", "").replace("€", "").replace("A$", "").replace("C$", "").strip()
+    # SA format: 1 660,00 (space thousands, comma decimal)
     if "," in cleaned and "." not in cleaned:
         cleaned = cleaned.replace(" ", "").replace(",", ".")
-    # Format with both: 1,660.00 → strip commas
+    # US/UK format: 1,660.00 (comma thousands, dot decimal)
     elif "," in cleaned and "." in cleaned:
         cleaned = cleaned.replace(",", "")
+    # No separator issues
     else:
         cleaned = cleaned.replace(" ", "").replace(",", "")
     try:
@@ -244,283 +209,265 @@ def parse_price(raw: str) -> float:
         return None
 
 
-# Fix #2 — Extract seller/price from Amazon's JSON data islands
-# Amazon embeds buybox data as JSON in <script type="a-state"> tags.
-# This is the most layout-independent method — works on all page variants.
-def _extract_from_json_islands(html: str) -> dict:
+def get_offer_listing_data(asin: str, marketplace: str = "amazon.co.za") -> dict:
     """
-    Parse Amazon's a-state JSON blobs embedded in the page.
-    Returns dict with 'seller' and/or 'price' if found.
+    Scrape the 'All Buying Options' page when main page doesn't show seller.
+    URL: https://www.amazon.co.za/gp/offer-listing/ASIN
     """
-    result = {}
-    # Find all a-state script tags
-    pattern = re.compile(
-        r'<script[^>]+type=["\']a-state["\'][^>]*data-a-state=["\']([^"\']+)["\'][^>]*>(.*?)</script>',
-        re.DOTALL | re.IGNORECASE
-    )
-    for m in pattern.finditer(html):
-        try:
-            meta_raw = m.group(1).replace("&quot;", '"')
-            meta = json.loads(meta_raw)
-            key = meta.get("key", "")
-        except Exception:
-            continue
-
-        try:
-            blob = json.loads(m.group(2))
-        except Exception:
-            continue
-
-        # desktop-ptf or buybox blobs contain merchantName / price
-        if key in ("desktop-ptf", "buybox", "buybox-supplementary", "aod-desktop-cache"):
-            # Walk the whole blob looking for merchant/seller keys
-            blob_str = json.dumps(blob)
-
-            # Seller — look for merchantName or sellerName
-            if "seller" not in result:
-                for seller_key in ("merchantName", "sellerName", "seller_name", "soldByName"):
-                    sel_m = re.search(
-                        rf'"{seller_key}"\s*:\s*"([^"{{}}]+)"', blob_str
-                    )
-                    if sel_m:
-                        name = sel_m.group(1).strip()
-                        if name and len(name) > 1:
-                            result["seller"] = name
-                            break
-
-            # Price — look for basisPrice / displayPrice / priceAmount
-            if "price" not in result:
-                for price_key in ("basisPrice", "displayPrice", "priceAmount", "amount"):
-                    pr_m = re.search(
-                        rf'"{price_key}"\s*:\s*"?([0-9][0-9,\. ]*[0-9])"?', blob_str
-                    )
-                    if pr_m:
-                        val = parse_price(pr_m.group(1))
-                        if val:
-                            result["price"] = val
-                            break
-
-    # Also try the raw a-price-display JSON which Amazon uses on newer layouts
-    raw_price_m = re.search(
-        r'"priceAmount"\s*:\s*([0-9]+\.?[0-9]*)', html
-    )
-    if "price" not in result and raw_price_m:
-        try:
-            result["price"] = float(raw_price_m.group(1))
-        except Exception:
-            pass
-
-    return result
-
-
-# Fix #5 — CAPTCHA / bot-block detection
-def _is_bot_blocked(html: str, status_code: int) -> bool:
-    """Return True if Amazon is serving a CAPTCHA or robot-check page."""
-    if status_code == 503:
-        return True
-    if not html:
-        return False
-    lower = html[:8000].lower()  # only check top of page — faster
-    signals = [
-        "enter the characters you see below",
-        "type the characters you see in this image",
-        "robot check",
-        "/errors/validatecaptcha",
-        "captchaimage",
-        "api-services-support@amazon.com",  # appears on block pages
-        "something went wrong on our end",
-    ]
-    return any(s in lower for s in signals)
-
-
-def get_offer_listing_data(asin: str) -> dict:
-    """
-    Scrape the 'All Buying Options' page as last resort.
-    Focused on amazon.co.za only.
-    """
-    url = f"https://www.amazon.co.za/gp/offer-listing/{asin}"
+    url = f"https://www.{marketplace}/gp/offer-listing/{asin}"
     headers = random.choice(HEADERS_LIST)
-    logger.info(f"Fetching offer-listing fallback for {asin}")
+    
+    logger.info(f"Fetching offer-listing page for ASIN: {asin}")
+    
     try:
-        session = _get_scrape_session()
-        time.sleep(random.uniform(2.5, 4.0))
+        session = requests.Session()
+        time.sleep(random.uniform(2.5, 4.5))  # Slightly longer delay for secondary page
         response = session.get(url, headers=headers, timeout=15, allow_redirects=True)
-        if response.status_code != 200 or _is_bot_blocked(response.text, response.status_code):
-            logger.warning(f"Offer-listing blocked/error ({response.status_code}) for {asin}")
+        
+        if response.status_code != 200:
+            logger.warning(f"Offer-listing page returned {response.status_code} for {asin}")
             return None
+        
         soup = BeautifulSoup(response.content, "lxml")
+        
+        # Find the first offer (usually the buybox winner or lowest price)
         offer_divs = soup.find_all("div", {"class": "a-row a-spacing-mini olpOffer"})
+        
         if not offer_divs:
+            logger.warning(f"No offers found on offer-listing page for {asin}")
             return None
+        
+        # Get the first (best) offer
         first_offer = offer_divs[0]
-        # Price
+        
+        # Extract price
         price = None
         price_span = first_offer.find("span", {"class": "a-price"})
         if price_span:
-            whole = price_span.find("span", {"class": "a-price-whole"})
-            frac  = price_span.find("span", {"class": "a-price-fraction"})
-            if whole:
+            price_whole = price_span.find("span", {"class": "a-price-whole"})
+            price_fraction = price_span.find("span", {"class": "a-price-fraction"})
+            if price_whole:
+                whole_text = price_whole.get_text(strip=True).replace(",", "").replace(" ", "").replace("R", "").strip()
+                frac_text = price_fraction.get_text(strip=True).strip() if price_fraction else "00"
                 try:
-                    price = float(f"{whole.get_text(strip=True).replace(',','').replace('R','').strip()}.{frac.get_text(strip=True) if frac else '00'}")
+                    price = float(f"{whole_text}.{frac_text}")
                 except Exception:
                     pass
+        
+        # If still no price, try offscreen price
         if not price:
-            off = first_offer.find("span", {"class": "a-offscreen"})
-            if off:
-                price = parse_price(off.get_text(strip=True))
-        # Seller
+            offscreen = first_offer.find("span", {"class": "a-offscreen"})
+            if offscreen:
+                price = parse_price(offscreen.get_text(strip=True))
+        
+        # Extract seller name - FIXED: More precise extraction
         seller = None
+        
+        # Method 1: Check for seller link/name in h3.olpSellerName
         seller_h3 = first_offer.find("h3", {"class": "a-spacing-none olpSellerName"})
         if seller_h3:
-            link = seller_h3.find("a")
-            seller = (link or seller_h3).get_text(strip=True)
+            # Look for link first
+            seller_link = seller_h3.find("a")
+            if seller_link:
+                seller_text = seller_link.get_text(strip=True)
+                seller = seller_text
+            else:
+                # If no link, check for span or direct text
+                seller_span = seller_h3.find("span")
+                if seller_span:
+                    seller_text = seller_span.get_text(strip=True)
+                    seller = seller_text
+                else:
+                    seller_text = seller_h3.get_text(strip=True)
+                    if seller_text and seller_text != "Amazon.co.za":
+                        seller = seller_text
+        
+        # Method 2: Look for merchant info in offer
+        if not seller:
+            merchant_link = first_offer.find("a", {"aria-label": lambda x: x and "seller" in x.lower()})
+            if merchant_link:
+                seller = merchant_link.get_text(strip=True)
+        
+        # Method 3: Check "Sold by" text patterns
         if not seller:
             offer_text = first_offer.get_text(" ", strip=True)
+            # Only mark as Amazon if explicitly stated
             if re.search(r'sold by amazon\.co\.za|ships from and sold by amazon', offer_text, re.I):
                 seller = "Amazon.co.za"
             else:
-                m = re.search(r'Sold by\s+([A-Z][^.\n]{2,50}?)(?:\s*\.|$|\s+Ship)', offer_text)
-                if m:
-                    seller = m.group(1).strip()
-        if price or seller:
-            logger.info(f"Offer-listing found: price={price}, seller={seller}")
+                # Try to extract seller from "Sold by X" pattern
+                sold_by_match = re.search(r'Sold by\s+([^\.\n]{2,50}?)(?:\s|$)', offer_text)
+                if sold_by_match:
+                    seller = sold_by_match.group(1).strip()
+        
+        if price and seller:
+            logger.success(f"✅ Found from offer-listing: Price={price}, Seller={seller}")
             return {"price": price, "seller": seller}
+        
         return None
+        
     except Exception as e:
-        logger.error(f"Offer-listing error for {asin}: {e}")
+        logger.error(f"Error scraping offer-listing for {asin}: {e}")
         return None
 
 
 def get_amazon_buybox(asin: str, marketplace: str = "amazon.co.za") -> dict:
-    """
-    Scrape amazon.co.za product page for buybox info.
-    Seller extraction priority:
-      0. JSON data islands (most reliable — layout-independent)
-      1. sellerProfileTriggerId link
-      2. offer-display-feature-text-message spans
-      3. merchant-info div
-      4. tabular-buybox Sold by row
-      5. a-color-secondary spans containing "sold by amazon"
-      6. Page text regex (tightened to avoid false positives)
-      7. offer-listing fallback page
-    """
-    url = f"https://www.amazon.co.za/dp/{asin}"
+    """Scrape Amazon product page for buybox info."""
+
+    url = f"https://www.{marketplace}/dp/{asin}"
     headers = random.choice(HEADERS_LIST)
-    logger.info(f"Scraping {asin} → {url}")
+
+    logger.info(f"Fetching buybox data for ASIN: {asin} from {url}")
 
     try:
-        session = _get_scrape_session()
+        session = requests.Session()
+        # Add a small delay to avoid rate limiting - increased for refresh stability
         time.sleep(random.uniform(2.5, 4.5))
-        response = session.get(url, headers=headers, timeout=20, allow_redirects=True)
-        logger.info(f"Response {response.status_code} for {asin}")
 
-        # Fix #5 — detect bot blocks before doing anything
-        if _is_bot_blocked(response.text, response.status_code):
-            logger.warning(f"Bot-blocked for {asin} (status {response.status_code}) — skipping save")
+        response = session.get(url, headers=headers, timeout=15, allow_redirects=True)
+        logger.info(f"Response status: {response.status_code}")
+
+        if response.status_code == 503:
             return {
-                "asin": asin, "status": "blocked",
-                "error": "Amazon bot-blocked this request (CAPTCHA). Data not updated.",
-                "url": url, "scraped_at": datetime.now().isoformat(),
-                "_skip_save": True,  # signals scheduler NOT to overwrite DB
+                "asin": asin,
+                "status": "blocked",
+                "error": "Amazon blocked the request (503). Try again shortly.",
+                "url": url,
+                "scraped_at": datetime.now().isoformat()
             }
 
         if response.status_code != 200:
             return {
-                "asin": asin, "status": "error",
+                "asin": asin,
+                "status": "error",
                 "error": f"HTTP {response.status_code}",
-                "url": url, "scraped_at": datetime.now().isoformat(),
-                "_skip_save": True,
+                "url": url,
+                "scraped_at": datetime.now().isoformat()
             }
 
-        html = response.text
         soup = BeautifulSoup(response.content, "lxml")
 
         result = {
-            "asin": asin, "url": url,
-            "marketplace": "amazon.co.za",
+            "asin": asin,
+            "url": url,
+            "marketplace": marketplace,
             "scraped_at": datetime.now().isoformat(),
             "status": "success",
-            "currency": "ZAR",
         }
 
-        # --- Title ---
-        title_el = soup.find("span", {"id": "productTitle"}) or soup.find("h1", {"id": "title"})
+        # --- Product Title ---
+        title_el = (
+            soup.find("span", {"id": "productTitle"}) or
+            soup.find("h1", {"id": "title"})
+        )
         result["title"] = title_el.get_text(strip=True) if title_el else "Unknown"
 
-        # --- Price ---
+        # --- Buybox Price ---
+        price = None
+        price_selectors = [
+            {"id": "priceblock_ourprice"},
+            {"id": "priceblock_dealprice"},
+            {"class": "a-price-whole"},
+            {"id": "price_inside_buybox"},
+            {"class": "priceToPay"},
+        ]
+
         def extract_price_from_block(block):
+            """Extract price from any soup block, handles whole+fraction or combined spans."""
             if not block:
                 return None
-            whole = block.find("span", {"class": "a-price-whole"})
-            frac  = block.find("span", {"class": "a-price-fraction"})
-            if whole:
-                w = whole.get_text(strip=True).replace(",", "").replace(".", "").replace("R", "").strip()
-                f = frac.get_text(strip=True).strip() if frac else "00"
-                f = re.sub(r'[^0-9]', '', f) or "00"
-                if w.isdigit():
+            # Try whole + fraction pattern
+            price_el = block.find("span", {"class": "a-price-whole"})
+            frac_el = block.find("span", {"class": "a-price-fraction"})
+            if price_el:
+                whole = price_el.get_text(strip=True).replace(",", "").replace(".", "").replace("R", "").strip()
+                frac = frac_el.get_text(strip=True).strip() if frac_el else "00"
+                frac = frac.replace(",", "").replace(".", "").strip()
+                if whole.isdigit():
                     try:
-                        return float(f"{w}.{f}")
+                        return float(f"{whole}.{frac if frac.isdigit() else '00'}")
                     except Exception:
                         pass
-            off = block.find("span", {"class": "a-offscreen"})
-            if off:
-                return parse_price(off.get_text(strip=True))
+            # Try a-offscreen (hidden full price text)
+            offscreen = block.find("span", {"class": "a-offscreen"})
+            if offscreen:
+                raw = offscreen.get_text(strip=True)
+                price = parse_price(raw)
+                if price:
+                    return price
             return None
 
-        price = None
-        for cid in ["corePriceDisplay_desktop_feature_div", "apex_desktop",
-                    "buybox", "buyNewSection", "price", "tmmSwatches"]:
-            block = soup.find(attrs={"id": cid})
+        # Try all known price container IDs
+        price_container_ids = [
+            "corePriceDisplay_desktop_feature_div",
+            "apex_desktop",
+            "buybox",
+            "buyNewSection",
+            "price",
+            "tmmSwatches",
+        ]
+        for container_id in price_container_ids:
+            block = soup.find(attrs={"id": container_id})
             price = extract_price_from_block(block)
             if price:
                 break
 
+        # Fallback: search whole page for a-offscreen price spans
         if not price:
             for span in soup.find_all("span", {"class": "a-offscreen"}):
-                val = parse_price(span.get_text(strip=True))
+                raw = span.get_text(strip=True)
+                val = parse_price(raw)
                 if val and val > 0:
                     price = val
                     break
 
+        # Final fallback: old-style price IDs
         if not price:
-            for sel in [{"id": "priceblock_ourprice"}, {"id": "priceblock_dealprice"},
-                        {"id": "price_inside_buybox"}, {"class": "priceToPay"}]:
+            for sel in price_selectors:
                 el = soup.find("span", sel)
                 if el:
-                    val = parse_price(el.get_text(strip=True))
-                    if val:
-                        price = val
+                    raw = el.get_text(strip=True).replace(",", "").replace("£", "").replace("$", "").replace("R", "").strip()
+                    try:
+                        price = float(raw)
                         break
+                    except Exception:
+                        continue
 
         result["buybox_price"] = price
+        if "amazon.co.za" in marketplace:
+            result["currency"] = "ZAR"
+        elif "amazon.co.uk" in marketplace:
+            result["currency"] = "GBP"
+        elif "amazon.de" in marketplace or "amazon.fr" in marketplace:
+            result["currency"] = "EUR"
+        elif "amazon.ca" in marketplace:
+            result["currency"] = "CAD"
+        elif "amazon.com.au" in marketplace:
+            result["currency"] = "AUD"
+        else:
+            result["currency"] = "USD"
 
-        # --- Seller — Fix #2: JSON data islands first ---
+        # --- Buybox Seller ---
         seller = None
-        json_data = _extract_from_json_islands(html)
-        if json_data.get("seller"):
-            seller = json_data["seller"].strip()
-            logger.info(f"Seller from JSON island: {seller}")
-        if not price and json_data.get("price"):
-            price = json_data["price"]
-            result["buybox_price"] = price
-            logger.info(f"Price from JSON island: {price}")
+        page_text = soup.get_text(" ", strip=True)
 
-        # Method 1 — sellerProfileTriggerId (most reliable for 3P sellers)
-        if not seller:
-            el = soup.find("a", {"id": "sellerProfileTriggerId"})
-            if el:
-                seller = el.get_text(strip=True)
-                logger.info(f"Seller from sellerProfileTriggerId: {seller}")
+        # 1. Try sellerProfileTriggerId - most reliable for 3rd party sellers
+        seller_link = soup.find("a", {"id": "sellerProfileTriggerId"})
+        if seller_link:
+            seller = seller_link.get_text(strip=True)
 
-        # Method 2 — offer-display-feature-text-message
+        # 2. Check offer-display-feature-text-message spans (shows seller name inline)
         if not seller:
             for span in soup.find_all("span", {"class": "offer-display-feature-text-message"}):
                 text = span.get_text(strip=True)
                 if text:
-                    seller = "Amazon.co.za" if re.search(r'amazon', text, re.I) else text
+                    if re.search(r'amazon', text, re.I):
+                        seller = "Amazon.co.za"
+                    else:
+                        seller = text
                     break
 
-        # Method 3 — merchant-info div
+        # 3. Check merchant-info div
         if not seller:
             merchant = soup.find("div", {"id": "merchant-info"})
             if merchant:
@@ -532,84 +479,87 @@ def get_amazon_buybox(asin: str, marketplace: str = "amazon.co.za") -> dict:
                     if re.search(r'amazon', txt, re.I):
                         seller = "Amazon.co.za"
 
-        # Method 4 — tabular-buybox "Sold by" row
+        # 4. Check tabular-buybox "Sold by" row
         if not seller:
             tabular = soup.find("div", {"id": "tabular-buybox"})
             if tabular:
                 for row in tabular.find_all("div", {"class": "tabular-buybox-text"}):
                     label = row.find("span", {"class": "a-color-secondary"})
-                    val   = row.find("span", {"class": "a-color-base"})
+                    val = row.find("span", {"class": "a-color-base"})
                     if label and val and "Sold by" in label.get_text():
                         seller = val.get_text(strip=True)
                         break
 
-        # Method 5 — a-color-secondary spans with "sold by amazon"
+        # 5. KEY FIX: "Sent from and sold by Amazon.co.za" pattern in a-color-secondary spans
         if not seller:
             for span in soup.find_all("span", {"class": lambda c: c and "a-color-secondary" in c}):
-                if re.search(r'sold by amazon', span.get_text(strip=True), re.I):
+                txt = span.get_text(strip=True)
+                if re.search(r'sold by amazon', txt, re.I):
                     seller = "Amazon.co.za"
                     break
 
-        # Method 6 — Fix #3: Tightened page-text regex
-        # Only match "Sold by <ProperNoun>" patterns — requires capital letter start
-        # and excludes product-description false positives like "sold by weight/unit"
+        # 6. Search full page text for "Sold by X" or "sold and fulfilled by X"
         if not seller:
-            page_text = soup.get_text(" ", strip=True)
-            m = re.search(
-                r'Sold by\s+([A-Z][A-Za-z0-9&\-\' ]{1,50}?)(?=\s*\.|$|\s+Ship|\s+Fulfilled|\s*\|)',
-                page_text
-            )
-            if m:
-                name = m.group(1).strip()
-                # Sanity: reject generic English phrases that slipped through
-                _junk = {"weight", "unit", "piece", "item", "the", "volume", "metre", "pack"}
-                if name.lower().split()[0] not in _junk:
-                    seller = "Amazon.co.za" if re.search(r'\bamazon\b', name, re.I) else name
+            # "Sold by SomeSeller" pattern
+            match = re.search(r'Sold by\s+([^\.\n\|]{2,60}?)(?:\s*\.|$|\s*Fulfilled|\s*Ships)', page_text)
+            if match:
+                name = match.group(1).strip()
+                if re.search(r'amazon', name, re.I):
+                    seller = "Amazon.co.za"
+                else:
+                    seller = name
 
-        # Final "shipped and sold by Amazon" anywhere
+        # 7. Final check: "Sent from and sold by Amazon" anywhere in page
         if not seller:
-            if re.search(
-                r'(sent from and sold by|sold and fulfilled by|ships from and sold by)\s*amazon',
-                soup.get_text(" ", strip=True), re.I
-            ):
+            if re.search(r'(sent from and sold by|sold and fulfilled by|ships from and sold by)\s*amazon', page_text, re.I):
                 seller = "Amazon.co.za"
 
-        # Method 7 — offer-listing fallback
+        # --- FALLBACK: If no seller/price found, try offer-listing page ---
         if not seller or not price:
-            logger.info(f"Trying offer-listing fallback for {asin}")
-            offer_data = get_offer_listing_data(asin)
+            logger.info(f"Main page missing data for {asin}, trying offer-listing page...")
+            offer_data = get_offer_listing_data(asin, marketplace)
             if offer_data:
                 if not price and offer_data.get("price"):
                     price = offer_data["price"]
                     result["buybox_price"] = price
+                    logger.info(f"✅ Got price from offer-listing: {price}")
                 if not seller and offer_data.get("seller"):
                     seller = offer_data["seller"]
+                    logger.info(f"✅ Got seller from offer-listing: {seller}")
 
-        # --- Status ---
+        # --- Determine buybox status ---
         seller_lower = (seller or "").lower().strip()
         is_amazon = bool(re.search(r'\bamazon\b', seller_lower))
-        is_mine   = MY_SELLER_NAME.lower() in seller_lower
+        is_mine = MY_SELLER_NAME.lower() in seller_lower
 
-        result["buybox_seller"]    = seller if seller else "Unknown"
+        result["buybox_seller"] = seller if seller else "Unknown"
         result["is_amazon_seller"] = is_amazon
-        result["is_my_buybox"]     = is_mine
-        result["buybox_status"]    = (
-            "winning" if is_mine else
-            "amazon"  if is_amazon else
-            "losing"  if seller else
-            "unknown"
+        result["is_my_buybox"] = is_mine
+        result["buybox_status"] = (
+            "winning" if is_mine
+            else "amazon" if is_amazon
+            else "losing" if seller
+            else "unknown"
         )
 
         # --- Rating & Reviews ---
         rating_el = soup.find("span", {"id": "acrPopover"})
+        rating_text = rating_el.get("title", "").split(" ")[0] if rating_el else None
+        # Convert rating to float, handle errors
         try:
-            result["rating"] = float(rating_el.get("title", "").split()[0]) if rating_el else None
-        except Exception:
+            result["rating"] = float(rating_text) if rating_text else None
+        except (ValueError, TypeError):
             result["rating"] = None
+
         reviews_el = soup.find("span", {"id": "acrCustomerReviewText"})
         if reviews_el:
-            rv = re.sub(r'[^0-9]', '', reviews_el.get_text(strip=True))
-            result["review_count"] = int(rv) if rv else None
+            review_text = reviews_el.get_text(strip=True).split(" ")[0]
+            # Clean review count: remove parentheses, commas, and convert to int
+            review_text = review_text.replace("(", "").replace(")", "").replace(",", "").strip()
+            try:
+                result["review_count"] = int(review_text) if review_text.isdigit() else None
+            except (ValueError, TypeError):
+                result["review_count"] = None
         else:
             result["review_count"] = None
 
@@ -617,24 +567,19 @@ def get_amazon_buybox(asin: str, marketplace: str = "amazon.co.za") -> dict:
         avail_el = soup.find("div", {"id": "availability"})
         result["availability"] = avail_el.get_text(strip=True) if avail_el else "Unknown"
 
-        # --- Image ---
+        # --- Product Image ---
         img_el = soup.find("img", {"id": "landingImage"}) or soup.find("img", {"id": "imgBlkFront"})
-        if img_el:
-            result["image_url"] = img_el.get("src") or img_el.get("data-old-hires") or None
-        else:
-            result["image_url"] = None
+        result["image_url"] = img_el.get("src") or img_el.get("data-a-dynamic-image", "").split('"')[1] if img_el else None
 
-        logger.success(f"✅ {asin}: price=R{price}, seller={seller}, status={result['buybox_status']}")
+        logger.success(f"✅ ASIN {asin}: Price={price}, Seller={seller}")
         return result
 
     except requests.exceptions.Timeout:
-        logger.error(f"Timeout for {asin}")
-        return {"asin": asin, "status": "error", "error": "Timeout", "url": url,
-                "scraped_at": datetime.now().isoformat(), "_skip_save": True}
+        logger.error(f"Timeout for ASIN {asin}")
+        return {"asin": asin, "status": "error", "error": "Request timed out", "url": url, "scraped_at": datetime.now().isoformat()}
     except Exception as e:
-        logger.error(f"Scrape error {asin}: {e}")
-        return {"asin": asin, "status": "error", "error": str(e), "url": url,
-                "scraped_at": datetime.now().isoformat(), "_skip_save": True}
+        logger.error(f"Error scraping ASIN {asin}: {e}")
+        return {"asin": asin, "status": "error", "error": str(e), "url": url, "scraped_at": datetime.now().isoformat()}
 
 
 # ============================================================================
@@ -754,21 +699,15 @@ def lookup_buybox(req: ASINRequest, db: Session = Depends(get_db)):
         data.setdefault("cost_price", getattr(existing, "cost_price", None))
     else:
         data = get_amazon_buybox(asin, req.marketplace)
-
-    # Fix #6 — only save if scrape succeeded and has useful data
-    if not data.get("_skip_save") and data.get("status") == "success":
-        save_asin(db, data)
-        if data.get("buybox_price"):
-            save_price_history(db, data)
-        if SCHEDULER_AVAILABLE:
-            try:
-                from alerts import check_and_alert
-                check_and_alert(old_status, data)
-            except Exception as ae:
-                logger.warning(f"Alert check failed for {asin}: {ae}")
-    elif data.get("_skip_save"):
-        logger.warning(f"lookup: skipping save for {asin} — {data.get('error','blocked/error')}")
-
+    save_asin(db, data)
+    save_price_history(db, data)
+    # Fire alerts
+    if SCHEDULER_AVAILABLE and data.get("status") == "success":
+        try:
+            from alerts import check_and_alert
+            check_and_alert(old_status, data)
+        except Exception as ae:
+            logger.warning(f"Alert check failed for {asin}: {ae}")
     return data
 
 
@@ -1681,25 +1620,16 @@ def refresh_selected_asins(req: dict, background_tasks: BackgroundTasks, db: Ses
     asins = [a.strip().upper() for a in (req.get("asins") or []) if a.strip()]
     if not asins:
         raise HTTPException(status_code=400, detail="No ASINs provided")
+    from scraper import scrape_buybox
     def _scrape_selected(asin_list, session):
         for asin in asin_list:
             try:
                 product = session.query(TrackedASIN).filter(TrackedASIN.asin == asin).first()
                 if not product:
                     continue
-                result = get_amazon_buybox(asin, "amazon.co.za")
-                skip = (
-                    result.get("_skip_save") or
-                    result.get("status") in ("error", "blocked") or
-                    (not result.get("buybox_seller") and not result.get("buybox_price"))
-                )
-                if not skip:
+                result = scrape_buybox(asin, product.marketplace or "amazon.co.za")
+                if result:
                     update_asin_data(session, asin, result)
-                    if result.get("buybox_price"):
-                        save_price_history(session, result)
-                else:
-                    logger.warning(f"refresh-selected: skipping save for {asin} — {result.get('error','blocked/error')}")
-                time.sleep(random.uniform(3, 6))
             except Exception as e:
                 logger.warning(f"refresh-selected error for {asin}: {e}")
     background_tasks.add_task(_scrape_selected, asins, db)
