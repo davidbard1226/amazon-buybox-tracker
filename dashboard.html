@@ -1228,7 +1228,33 @@ async function _runBackendRefresh(asins) {
 
 async function refreshSelected() {
   if (!selectedAsins.size) return;
-  await _runBackendRefresh([...selectedAsins]);
+  const asins = [...selectedAsins];
+  const MAX_TABS = 3;
+  const SCRAPE_WAIT = 12000;
+  showAlert('alertBox', '<span class="loading"></span>Opening ' + asins.length + ' selected product(s) in browser tabs for Chrome Extension to scrape...', 'info');
+  let currentBatch = 0;
+  const totalBatches = Math.ceil(asins.length / MAX_TABS);
+  const openBatch = () => {
+    if (currentBatch >= totalBatches) {
+      showAlert('alertBox', 'All ' + asins.length + ' tabs opened! Extension is scraping in background. Dashboard will auto-update.', 'success');
+      return;
+    }
+    const batchStart = currentBatch * MAX_TABS;
+    const batchEnd = Math.min(batchStart + MAX_TABS, asins.length);
+    const batch = asins.slice(batchStart, batchEnd);
+    showAlert('alertBox', '<span class="loading"></span>Batch ' + (currentBatch+1) + '/' + totalBatches + ': Opening ' + batch.length + ' tab(s)... (' + batchEnd + '/' + asins.length + ' total)', 'info');
+    batch.forEach((asin, index) => {
+      setTimeout(() => {
+        const prod = allProducts.find(p => p.asin === asin);
+        const domain = (prod && prod.marketplace || 'amazon.co.za').replace('www','');
+        const url = 'https://www.' + domain + '/dp/' + asin + '?auto_scrape=1&dashboard=' + encodeURIComponent(window.location.origin);
+        window.open(url, '_blank');
+      }, index * 1000);
+    });
+    currentBatch++;
+    setTimeout(openBatch, SCRAPE_WAIT);
+  };
+  openBatch();
 }
 
 async function refreshAll() {
