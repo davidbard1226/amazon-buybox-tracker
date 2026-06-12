@@ -1232,7 +1232,33 @@ async function refreshSelected() {
 }
 
 async function refreshAll() {
-  await _runBackendRefresh([]);
+  if (!allProducts.length) { showAlert('alertBox', 'No products tracked yet.', 'error'); return; }
+  const MAX_TABS = 3;
+  const SCRAPE_WAIT = 12000;
+  showAlert('alertBox', '<span class="loading"></span>Starting batch refresh of all ' + allProducts.length + ' products - Opening max ' + MAX_TABS + ' tabs at a time... Make sure Chrome Extension is installed.', 'info');
+  let currentBatch = 0;
+  const totalBatches = Math.ceil(allProducts.length / MAX_TABS);
+  const openBatch = () => {
+    if (currentBatch >= totalBatches) {
+      showAlert('alertBox', 'All batches complete! Reloading dashboard...', 'success');
+      setTimeout(() => loadDashboard(), 3000);
+      return;
+    }
+    const batchStart = currentBatch * MAX_TABS;
+    const batchEnd = Math.min(batchStart + MAX_TABS, allProducts.length);
+    const batch = allProducts.slice(batchStart, batchEnd);
+    showAlert('alertBox', '<span class="loading"></span>Batch ' + (currentBatch+1) + '/' + totalBatches + ': Opening ' + batch.length + ' tab(s)... (' + batchEnd + '/' + allProducts.length + ' total)', 'info');
+    batch.forEach((p, index) => {
+      setTimeout(() => {
+        const domain = (p.marketplace || 'amazon.co.za').replace('www.','');
+        const url = 'https://www.' + domain + '/dp/' + p.asin + '?auto_scrape=1&dashboard=' + encodeURIComponent(window.location.origin);
+        window.open(url, '_blank');
+      }, index * 1000);
+    });
+    currentBatch++;
+    setTimeout(openBatch, SCRAPE_WAIT);
+  };
+  openBatch();
 }
 
 // ── Google Sheet Cost Sync ────────────────────────────────────────
