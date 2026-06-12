@@ -1229,7 +1229,7 @@ async function _runBackendRefresh(asins) {
 async function refreshSelected() {
   if (!selectedAsins.size) return;
   const asins = [...selectedAsins];
-  const BATCH_SIZE = 5;
+  const BATCH = 5;
 
   const baseline = {};
   asins.forEach(a => {
@@ -1237,64 +1237,77 @@ async function refreshSelected() {
     baseline[a] = p ? p.scraped_at : null;
   });
 
-  // Open a small off-screen popup window — all tabs go there, won't steal focus
-  const scrapeWin = window.open('', 'buybox_scrape_win', 'width=200,height=200,left=-400,top=-400');
+  // Create a small off-screen popup window for all scraping tabs
+  const scrapeUrl = 'about:blank';
+  const scrapeWin = window.open(scrapeUrl, 'buybox_scrape_win', 'width=1,height=1,left=-10,top=-10');
   if (!scrapeWin) { showAlert('alertBox', 'Popup blocked! Allow popups for this site and try again.', 'error'); return; }
 
-  showAlert('alertBox', '<span class="loading"></span>Opening ' + asins.length + ' tabs in background window...', 'info');
+  showAlert('alertBox', '<span class="loading"></span>Opening ' + asins.length + ' tabs in background window (batches of ' + BATCH + ')...', 'info');
 
-  let opened = 0;
-  const openNext = () => {
-    if (opened >= asins.length) {
+  let currentBatch = 0;
+  const totalBatches = Math.ceil(asins.length / BATCH);
+
+  const openBatch = () => {
+    if (currentBatch >= totalBatches) {
       startRefreshPoll(asins, baseline, 'selected');
       return;
     }
-    const asin = asins[opened];
-    const prod = allProducts.find(p => p.asin === asin);
-    const domain = (prod && prod.marketplace || 'amazon.co.za').replace('www','');
-    const url = 'https://www.' + domain + '/dp/' + asin + '?auto_scrape=1&dashboard=' + encodeURIComponent(window.location.origin);
-    scrapeWin.location.href = url;
-    opened++;
-    showAlert('alertBox', '<span class="loading"></span>Opened ' + opened + '/' + asins.length + ' — scraping in background...', 'info');
-    setTimeout(openNext, 4000);
+    const start = currentBatch * BATCH;
+    const end = Math.min(start + BATCH, asins.length);
+    const batch = asins.slice(start, end);
+    batch.forEach((asin, i) => {
+      const prod = allProducts.find(p => p.asin === asin);
+      const domain = (prod && prod.marketplace || 'amazon.co.za').replace('www','');
+      const url = 'https://www.' + domain + '/dp/' + asin + '?auto_scrape=1&dashboard=' + encodeURIComponent(window.location.origin);
+      try { scrapeWin.open(url, 'scrape_' + asin); } catch(e) {}
+    });
+    currentBatch++;
+    showAlert('alertBox', '<span class="loading"></span>Opened ' + end + '/' + asins.length + ' tabs in background — Extension scraping...', 'info');
+    setTimeout(openBatch, 8000);
   };
-  openNext();
+  openBatch();
 }
 
 async function refreshAll() {
   if (!allProducts.length) { showAlert('alertBox', 'No products tracked yet.', 'error'); return; }
   const asins = allProducts.map(p => p.asin);
-  const BATCH_SIZE = 5;
+  const BATCH = 5;
 
   const baseline = {};
   allProducts.forEach(p => { baseline[p.asin] = p.scraped_at; });
 
-  const scrapeWin = window.open('', 'buybox_scrape_win', 'width=200,height=200,left=-400,top=-400');
+  const scrapeWin = window.open('about:blank', 'buybox_scrape_win', 'width=1,height=1,left=-10,top=-10');
   if (!scrapeWin) { showAlert('alertBox', 'Popup blocked! Allow popups for this site and try again.', 'error'); return; }
 
   showAlert('alertBox', '<span class="loading"></span>Opening ' + asins.length + ' tabs in background window...', 'info');
 
-  let opened = 0;
-  const openNext = () => {
-    if (opened >= asins.length) {
+  let currentBatch = 0;
+  const totalBatches = Math.ceil(asins.length / BATCH);
+
+  const openBatch = () => {
+    if (currentBatch >= totalBatches) {
       startRefreshPoll(asins, baseline, 'all');
       return;
     }
-    const p = allProducts[opened];
-    const domain = (p.marketplace || 'amazon.co.za').replace('www','');
-    const url = 'https://www.' + domain + '/dp/' + p.asin + '?auto_scrape=1&dashboard=' + encodeURIComponent(window.location.origin);
-    scrapeWin.location.href = url;
-    opened++;
-    showAlert('alertBox', '<span class="loading"></span>Opened ' + opened + '/' + asins.length + ' — scraping in background...', 'info');
-    setTimeout(openNext, 4000);
+    const start = currentBatch * BATCH;
+    const end = Math.min(start + BATCH, asins.length);
+    const batch = allProducts.slice(start, end);
+    batch.forEach((p, i) => {
+      const domain = (p.marketplace || 'amazon.co.za').replace('www','');
+      const url = 'https://www.' + domain + '/dp/' + p.asin + '?auto_scrape=1&dashboard=' + encodeURIComponent(window.location.origin);
+      try { scrapeWin.open(url, 'scrape_' + p.asin); } catch(e) {}
+    });
+    currentBatch++;
+    showAlert('alertBox', '<span class="loading"></span>Opened ' + end + '/' + asins.length + ' tabs in background — Extension scraping...', 'info');
+    setTimeout(openBatch, 8000);
   };
-  openNext();
+  openBatch();
 }
 
 function startRefreshPoll(asins, baseline, label) {
-  showAlert('alertBox', '<span class="loading"></span>All tabs opened — waiting for Extension to scrape. Checking for updates...', 'info');
+  showAlert('alertBox', '<span class="loading"></span>All tabs opened — Extension scraping in background. Checking for updates...', 'info');
   let pollCount = 0;
-  const maxPolls = 30;
+  const maxPolls = 40;
   if (_refreshPollTimer) { clearInterval(_refreshPollTimer); _refreshPollTimer = null; }
   _refreshPollTimer = setInterval(async () => {
     pollCount++;
