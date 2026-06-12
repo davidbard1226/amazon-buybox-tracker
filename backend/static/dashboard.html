@@ -1230,25 +1230,33 @@ async function refreshSelected() {
   if (!selectedAsins.size) return;
   const asins = [...selectedAsins];
   const MAX_TABS = 3;
-  const SCRAPE_WAIT = 12000;
-  showAlert('alertBox', '<span class="loading"></span>Opening ' + asins.length + ' selected product(s) in browser tabs for Chrome Extension to scrape...', 'info');
+  const SCRAPE_WAIT = 10000;
+
+  // Snapshot current scraped_at so we detect new data
+  const baseline = {};
+  asins.forEach(a => {
+    const p = allProducts.find(x => x.asin === a);
+    baseline[a] = p ? p.scraped_at : null;
+  });
+
+  showAlert('alertBox', '<span class="loading"></span>Opening ' + asins.length + ' selected product(s) in browser tabs...', 'info');
   let currentBatch = 0;
   const totalBatches = Math.ceil(asins.length / MAX_TABS);
+
   const openBatch = () => {
     if (currentBatch >= totalBatches) {
-      showAlert('alertBox', 'All ' + asins.length + ' tabs opened! Extension is scraping in background. Dashboard will auto-update.', 'success');
+      startRefreshPoll(asins, baseline, 'selected');
       return;
     }
     const batchStart = currentBatch * MAX_TABS;
     const batchEnd = Math.min(batchStart + MAX_TABS, asins.length);
     const batch = asins.slice(batchStart, batchEnd);
-    showAlert('alertBox', '<span class="loading"></span>Batch ' + (currentBatch+1) + '/' + totalBatches + ': Opening ' + batch.length + ' tab(s)... (' + batchEnd + '/' + asins.length + ' total)', 'info');
+    showAlert('alertBox', '<span class="loading"></span>Batch ' + (currentBatch+1) + '/' + totalBatches + ': Opening ' + batch.length + ' tab(s)... (' + batchEnd + '/' + asins.length + ')', 'info');
     batch.forEach((asin, index) => {
       setTimeout(() => {
         const prod = allProducts.find(p => p.asin === asin);
         const domain = (prod && prod.marketplace || 'amazon.co.za').replace('www','');
-        const url = 'https://www.' + domain + '/dp/' + asin + '?auto_scrape=1&dashboard=' + encodeURIComponent(window.location.origin);
-        window.open(url, '_blank');
+        window.open('https://www.' + domain + '/dp/' + asin + '?auto_scrape=1&dashboard=' + encodeURIComponent(window.location.origin), '_blank');
       }, index * 1000);
     });
     currentBatch++;
@@ -1259,32 +1267,65 @@ async function refreshSelected() {
 
 async function refreshAll() {
   if (!allProducts.length) { showAlert('alertBox', 'No products tracked yet.', 'error'); return; }
+  const asins = allProducts.map(p => p.asin);
   const MAX_TABS = 3;
-  const SCRAPE_WAIT = 12000;
-  showAlert('alertBox', '<span class="loading"></span>Starting batch refresh of all ' + allProducts.length + ' products - Opening max ' + MAX_TABS + ' tabs at a time... Make sure Chrome Extension is installed.', 'info');
+  const SCRAPE_WAIT = 10000;
+
+  // Snapshot current scraped_at
+  const baseline = {};
+  allProducts.forEach(p => { baseline[p.asin] = p.scraped_at; });
+
+  showAlert('alertBox', '<span class="loading"></span>Starting batch refresh of all ' + asins.length + ' products...', 'info');
   let currentBatch = 0;
-  const totalBatches = Math.ceil(allProducts.length / MAX_TABS);
+  const totalBatches = Math.ceil(asins.length / MAX_TABS);
+
   const openBatch = () => {
     if (currentBatch >= totalBatches) {
-      showAlert('alertBox', 'All batches complete! Reloading dashboard...', 'success');
-      setTimeout(() => loadDashboard(), 3000);
+      startRefreshPoll(asins, baseline, 'all');
       return;
     }
     const batchStart = currentBatch * MAX_TABS;
-    const batchEnd = Math.min(batchStart + MAX_TABS, allProducts.length);
+    const batchEnd = Math.min(batchStart + MAX_TABS, asins.length);
     const batch = allProducts.slice(batchStart, batchEnd);
-    showAlert('alertBox', '<span class="loading"></span>Batch ' + (currentBatch+1) + '/' + totalBatches + ': Opening ' + batch.length + ' tab(s)... (' + batchEnd + '/' + allProducts.length + ' total)', 'info');
+    showAlert('alertBox', '<span class="loading"></span>Batch ' + (currentBatch+1) + '/' + totalBatches + ': Opening ' + batch.length + ' tab(s)... (' + batchEnd + '/' + asins.length + ')', 'info');
     batch.forEach((p, index) => {
       setTimeout(() => {
-        const domain = (p.marketplace || 'amazon.co.za').replace('www.','');
-        const url = 'https://www.' + domain + '/dp/' + p.asin + '?auto_scrape=1&dashboard=' + encodeURIComponent(window.location.origin);
-        window.open(url, '_blank');
+        const domain = (p.marketplace || 'amazon.co.za').replace('www','');
+        window.open('https://www.' + domain + '/dp/' + p.asin + '?auto_scrape=1&dashboard=' + encodeURIComponent(window.location.origin), '_blank');
       }, index * 1000);
     });
     currentBatch++;
     setTimeout(openBatch, SCRAPE_WAIT);
   };
   openBatch();
+}
+
+function startRefreshPoll(asins, baseline, label) {
+  showAlert('alertBox', '<span class="loading"></span>All tabs opened — waiting for Extension to scrape. Checking for updates...', 'info');
+  let pollCount = 0;
+  const maxPolls = 30;
+  if (_refreshPollTimer) { clearInterval(_refreshPollTimer); _refreshPollTimer = null; }
+  _refreshPollTimer = setInterval(async () => {
+    pollCount++;
+    try {
+      const r = await fetch(API + '/api/buybox/tracked');
+      if (!r.ok) return;
+      const d = await r.json();
+      allProducts = d.asins || [];
+      updateStats();
+      renderTable();
+      const updated = asins.filter(a => {
+        const p = allProducts.find(x => x.asin === a);
+        return p && p.scraped_at && p.scraped_at !== baseline[a];
+      }).length;
+      showAlert('alertBox', '<span class="loading"></span>Refreshing ' + label + ' — <b>' + updated + '/' + asins.length + '</b> updated so far… (auto-updates every 5s)', 'info');
+      if (updated >= asins.length || pollCount >= maxPolls) {
+        clearInterval(_refreshPollTimer); _refreshPollTimer = null;
+        showAlert('alertBox', '✅ Done! ' + updated + ' of ' + asins.length + ' products updated.', 'success');
+        setTimeout(() => clearAlert('alertBox'), 5000);
+      }
+    } catch(e) {}
+  }, 5000);
 }
 
 // ── Google Sheet Cost Sync ────────────────────────────────────────
