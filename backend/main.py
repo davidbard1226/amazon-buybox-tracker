@@ -1077,6 +1077,7 @@ def _run_import_job(job_id: str, content: bytes, filename: str):
                 sku = _find_col(row, "SKU", "sku", "Seller SKU", "SellerSKU")
                 my_price_raw = _find_col(row, "My Price", "MyPrice", "Price", "my_price", "YourPrice")
                 stock_raw = _find_col(row, "Stock", "Qty", "Quantity", "stock", "StockLevel", "AvailableQty")
+                cost_price_raw = _find_col(row, "Cost Price", "CostPrice", "cost_price", "Cost", "Unit Cost")
 
                 my_price = None
                 if my_price_raw:
@@ -1092,6 +1093,13 @@ def _run_import_job(job_id: str, content: bytes, filename: str):
                     except Exception:
                         pass
 
+                cost_price = None
+                if cost_price_raw:
+                    try:
+                        cost_price = float(re.sub(r'[^\d.]', '', cost_price_raw))
+                    except Exception:
+                        pass
+
                 try:
                     existing = db.query(TrackedASIN).filter(TrackedASIN.asin == asin).first()
                     if existing:
@@ -1101,10 +1109,13 @@ def _run_import_job(job_id: str, content: bytes, filename: str):
                             existing.my_price = my_price
                         if my_stock is not None:
                             existing.my_stock = my_stock
+                        if cost_price is not None:
+                            existing.cost_price = cost_price
                         existing.updated_at = datetime.utcnow()
                     else:
                         new_rec = TrackedASIN(
                             asin=asin, sku=sku, my_price=my_price, my_stock=my_stock,
+                            cost_price=cost_price,
                             marketplace="amazon.co.za", buybox_status="unknown",
                             title=f"Pending scrape... ({asin})", scraped_at=None,
                         )
