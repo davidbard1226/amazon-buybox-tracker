@@ -1003,8 +1003,24 @@ function renderTable() {
     const AMZN_FEE = 0.06;
     const cost = p.cost_price ? Number(p.cost_price) : null;
     const costHtml = cost
-      ? `<div style="font-weight:600;color:#e2e8f0;">${cur}${cost.toLocaleString('en-ZA',{minimumFractionDigits:2})}</div>${p.cost_supplier ? `<div style="font-size:0.7rem;color:#64748b;margin-top:2px;">${p.cost_supplier}</div>` : ''}`
-      : `<span style="color:#334155;font-size:0.8rem;">—</span>`;
+      ? `<div id="cost-display-${p.asin}" style="display:flex;align-items:center;gap:4px;">
+           <div style="font-weight:600;color:#e2e8f0;">${cur}${cost.toLocaleString('en-ZA',{minimumFractionDigits:2})}</div>
+           ${p.cost_supplier ? `<div style="font-size:0.7rem;color:#64748b;margin-top:2px;">${p.cost_supplier}</div>` : ''}
+         </div>
+         <div id="cost-edit-${p.asin}" style="display:none;gap:4px;align-items:center;">
+           <input id="cost-input-${p.asin}" type="number" step="0.01" min="0" value="${cost}" style="width:80px;padding:4px 8px;font-size:0.8rem;font-family:monospace;background:#0f172a;border:1px solid #f97316;color:#e2e8f0;border-radius:5px;" onkeydown="if(event.key==='Enter')saveCost('${p.asin}');if(event.key==='Escape')cancelCost('${p.asin}')"/>
+           <button onclick="saveCost('${p.asin}')" style="background:#f97316;border:none;color:#fff;padding:3px 8px;border-radius:4px;cursor:pointer;font-size:0.75rem;">✓</button>
+           <button onclick="cancelCost('${p.asin}')" style="background:#334155;border:none;color:#e2e8f0;padding:3px 8px;border-radius:4px;cursor:pointer;font-size:0.75rem;">✕</button>
+         </div>
+         <button onclick="editCost('${p.asin}',${cost},this)" title="Edit Cost" style="background:none;border:none;cursor:pointer;color:#475569;font-size:0.7rem;padding:1px 4px;border-radius:3px;transition:color 0.2s;" onmouseover="this.style.color='#f97316'" onmouseout="this.style.color='#475569'">✏️</button>`
+      : `<div id="cost-display-${p.asin}" style="display:none;"></div>
+         <div id="cost-edit-${p.asin}" style="display:none;gap:4px;align-items:center;">
+           <input id="cost-input-${p.asin}" type="number" step="0.01" min="0" placeholder="R0.00" style="width:80px;padding:4px 8px;font-size:0.8rem;font-family:monospace;background:#0f172a;border:1px solid #f97316;color:#e2e8f0;border-radius:5px;" onkeydown="if(event.key==='Enter')saveCost('${p.asin}');if(event.key==='Escape')cancelCost('${p.asin}')"/>
+           <button onclick="saveCost('${p.asin}')" style="background:#f97316;border:none;color:#fff;padding:3px 8px;border-radius:4px;cursor:pointer;font-size:0.75rem;">✓</button>
+           <button onclick="cancelCost('${p.asin}')" style="background:#334155;border:none;color:#e2e8f0;padding:3px 8px;border-radius:4px;cursor:pointer;font-size:0.75rem;">✕</button>
+         </div>
+         <span style="color:#334155;font-size:0.8rem;">—</span>
+         <button onclick="editCost('${p.asin}',null,this)" title="Add Cost" style="background:none;border:none;cursor:pointer;color:#475569;font-size:0.7rem;padding:1px 4px;border-radius:3px;transition:color 0.2s;" onmouseover="this.style.color='#f97316'" onmouseout="this.style.color='#475569'">✏️</button>`;
     const myP = p.my_price ? Number(p.my_price) : null;
     let profitHtml = '';
     if (cost && myP) {
@@ -1414,6 +1430,53 @@ async function saveSku(asin) {
   } catch(e) {
     showAlert('alertBox', '❌ Error: ' + e.message, 'error');
     cancelSku(asin);
+  }
+}
+
+function editCost(asin, currentCost, btn) {
+  const displayEl = document.getElementById('cost-display-' + asin);
+  const editEl = document.getElementById('cost-edit-' + asin);
+  if (displayEl) displayEl.style.display = 'none';
+  if (editEl) editEl.style.display = 'flex';
+  const inp = document.getElementById('cost-input-' + asin);
+  if (inp) { inp.value = currentCost || ''; inp.focus(); inp.select(); }
+  if (btn) btn.style.display = 'none';
+}
+
+function cancelCost(asin) {
+  const displayEl = document.getElementById('cost-display-' + asin);
+  const editEl = document.getElementById('cost-edit-' + asin);
+  const prod = allProducts.find(p => p.asin === asin);
+  if (displayEl) displayEl.style.display = (prod && prod.cost_price) ? 'flex' : 'none';
+  if (editEl) editEl.style.display = 'none';
+  const row = displayEl ? displayEl.closest('tr') : null;
+  if (row) { const eb = row.querySelector('[title="Edit Cost"],[title="Add Cost"]'); if (eb) eb.style.display = ''; }
+}
+
+async function saveCost(asin) {
+  const input = document.getElementById('cost-input-' + asin);
+  if (!input) return;
+  const newCost = parseFloat(input.value);
+  if (isNaN(newCost) || newCost < 0) { alert('Enter a valid cost amount'); return; }
+  const prod = allProducts.find(p => p.asin === asin);
+  try {
+    const resp = await fetch(API + '/api/costs/update', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({asin: asin, cost_price: newCost})
+    });
+    const data = await resp.json();
+    if (resp.ok) {
+      prod.cost_price = newCost;
+      showAlert('alertBox', `✅ Cost updated to <b>R${newCost.toLocaleString('en-ZA',{minimumFractionDigits:2})}</b> for ${asin}.`, 'success');
+      renderTable();
+    } else {
+      showAlert('alertBox', '❌ Failed to update cost: ' + (data.detail || 'unknown error'), 'error');
+      cancelCost(asin);
+    }
+  } catch(e) {
+    showAlert('alertBox', '❌ Error: ' + e.message, 'error');
+    cancelCost(asin);
   }
 }
 
