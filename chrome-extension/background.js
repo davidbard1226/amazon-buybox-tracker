@@ -76,6 +76,13 @@ function handleMessage(request, sender, sendResponse) {
       .catch(error => sendResponse({ success: false, error: error.message }));
     return true;
   }
+
+  if (request.action === 'batchScrapeUrls') {
+    handleBatchScrapeUrls(request.urls)
+      .then(result => sendResponse({ success: true, result }))
+      .catch(error => sendResponse({ success: false, error: error.message }));
+    return true;
+  }
 }
 
 // ─── Get cleaned backend URL ─────────────────────────────────────────────────
@@ -501,6 +508,30 @@ async function scrapeAsinInTab(asin, marketplace) {
       }, 30000);
     });
   });
+}
+
+async function handleBatchScrapeUrls(urls) {
+  const PARALLEL = 3;
+  const DELAY_MS = 3000;
+  let opened = 0;
+  let totalTabs = 0;
+
+  for (let i = 0; i < urls.length; i += PARALLEL) {
+    const batch = urls.slice(i, i + PARALLEL);
+    const tabIds = await Promise.all(batch.map(url =>
+      new Promise(resolve => {
+        chrome.tabs.create({ url, active: false }, tab => {
+          totalTabs++;
+          resolve(tab.id);
+        });
+      })
+    ));
+    opened += batch.length;
+    if (i + PARALLEL < urls.length) {
+      await new Promise(r => setTimeout(r, DELAY_MS));
+    }
+  }
+  return { opened: totalTabs };
 }
 
 // ─── Auto-upload price file to Seller Central ────────────────────────────────
