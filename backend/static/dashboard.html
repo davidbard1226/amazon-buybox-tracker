@@ -1465,8 +1465,15 @@ let repriceRows = []; // computed rows
 let repriceSelected = new Set();
 
 function openRepriceModal() {
-  document.getElementById('repriceModal').style.display = 'block';
-  renderRepriceTable();
+  try {
+    var modal = document.getElementById('repriceModal');
+    if (!modal) { alert('Reprice modal element not found in page'); return; }
+    modal.style.display = 'block';
+    renderRepriceTable();
+  } catch(e) {
+    console.error('openRepriceModal error:', e);
+    alert('Error opening Repricer: ' + e.message);
+  }
 }
 function closeRepriceModal() {
   document.getElementById('repriceModal').style.display = 'none';
@@ -3057,6 +3064,7 @@ function scheduleTgSave() {
   _tgSaveTimer = setTimeout(function() { saveAlertSettings(true); }, 1500);
 }
 
+console.log('[DEBUG] Script loaded, openRepriceModal is', typeof openRepriceModal);
 checkHealth();
 setInterval(checkHealth, 10000); // poll every 10s so we detect wake-up faster
 loadDashboard();
