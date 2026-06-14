@@ -113,13 +113,13 @@ tr[id^="qr-"] td input{pointer-events:auto;position:relative;z-index:20;}
   <h1>📦 Amazon <span>Buybox</span> Tracker</h1>
   <div style="display:flex;align-items:center;gap:16px;">
     <div class="nav">
-      <button class="nav-btn active" onclick="showPage('dashboard')">🏠 Dashboard</button>
-      <button class="nav-btn" onclick="showPage('lookup')">🔍 Lookup</button>
-      <button class="nav-btn" onclick="showPage('bulk')">📋 Bulk Upload</button>
-      <button class="nav-btn" onclick="showPage('analytics')">📊 Analytics</button>
-      <button class="nav-btn" onclick="showPage('settings')">⚙️ Settings</button>
-      <button class="nav-btn" onclick="showPage('pricing')">💲 Manage Pricing</button>
-      <button class="nav-btn" onclick="showPage('intelligence')">🕵️ Intelligence</button>
+      <button class="nav-btn active" onclick="showPage('dashboard', this)">🏠 Dashboard</button>
+      <button class="nav-btn" onclick="showPage('lookup', this)">🔍 Lookup</button>
+      <button class="nav-btn" onclick="showPage('bulk', this)">📋 Bulk Upload</button>
+      <button class="nav-btn" onclick="showPage('analytics', this)">📊 Analytics</button>
+      <button class="nav-btn" onclick="showPage('settings', this)">⚙️ Settings</button>
+      <button class="nav-btn" onclick="showPage('pricing', this)">💲 Manage Pricing</button>
+      <button class="nav-btn" onclick="showPage('intelligence', this)">🕵️ Intelligence</button>
     </div>
     <span id="backendBadge" class="badge badge-offline">⚫ Offline</span>
   </div>
@@ -145,8 +145,8 @@ tr[id^="qr-"] td input{pointer-events:auto;position:relative;z-index:20;}
         <button class="btn btn-sm" style="background:#334155;color:#e2e8f0;" id="refreshSelectedBtn" onclick="refreshSelected()" style="display:none;">🔄 Refresh Selected</button>
         <button class="btn btn-primary btn-sm" onclick="refreshAll()">🔄 Refresh All</button>
         <button class="btn btn-sm" style="background:#1e293b;color:#94a3b8;border:1px solid #334155;" onclick="toggleColMenu(event)">🗂 Columns ▾</button>
-        <button class="btn btn-sm" style="background:#1e3a5f;color:#93c5fd;border:1px solid #2563eb;" onclick="syncGSheet()">📊 Sync Costs</button>
-        <button class="btn btn-sm" style="background:#064e3b;color:#6ee7b7;border:1px solid #10b981;" onclick="syncMyPricesGSheet()">💰 Sync My Prices</button>
+        <button class="btn btn-sm" style="background:#1e3a5f;color:#93c5fd;border:1px solid #2563eb;" onclick="syncGSheet(this)">📊 Sync Costs</button>
+        <button class="btn btn-sm" style="background:#064e3b;color:#6ee7b7;border:1px solid #10b981;" onclick="syncMyPricesGSheet(this)">💰 Sync My Prices</button>
         <button class="btn btn-sm" style="background:#1e1a4a;color:#c4b5fd;border:1px solid #7c3aed;" onclick="downloadPriceFile('all')" title="Download flat file for all products — upload to Seller Central">📥 Download All Prices</button>
         <button class="btn btn-sm" style="background:#2d1a00;color:#fcd34d;border:1px solid #d97706;" onclick="openRepriceModal()" title="Select products to reprice, review new prices, then download">🤖 Repricer</button>
       </div>
@@ -508,7 +508,7 @@ tr[id^="qr-"] td input{pointer-events:auto;position:relative;z-index:20;}
       <option value="30">Last 30 days</option>
     </select>
     <button class="btn btn-primary btn-sm" onclick="loadIntelligence()">🔄 Refresh</button>
-    <button class="btn btn-sm" style="background:#6366f1;color:#fff;padding:8px 16px;border-radius:6px;border:none;cursor:pointer;font-size:0.875rem;font-weight:600" onclick="sendDailySummaryNow()">📤 Send Daily Summary Now</button>
+    <button class="btn btn-sm" style="background:#6366f1;color:#fff;padding:8px 16px;border-radius:6px;border:none;cursor:pointer;font-size:0.875rem;font-weight:600" onclick="sendDailySummaryNow(this)">📤 Send Daily Summary Now</button>
     <div id="intelStatus" style="font-size:0.8rem;color:#94a3b8;margin-left:auto"></div>
   </div>
   <div class="stats-grid" id="intelStatsRow" style="margin-bottom:20px"></div>
@@ -651,11 +651,11 @@ let pageSize = 25;
 let currentPage = 1;
 
 // ── Page Navigation ──────────────────────────────────────────────
-function showPage(name) {
+function showPage(name, el) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
   document.getElementById('page-' + name).classList.add('active');
-  event.target.classList.add('active');
+  if (el) el.classList.add('active');
   if (name === 'dashboard') loadDashboard();
   if (name === 'analytics') loadAnalytics();
   if (name === 'settings') loadSettings();
@@ -1328,8 +1328,7 @@ function startRefreshPoll(asins, baseline, label) {
 }
 
 // ── Google Sheet Cost Sync ────────────────────────────────────────
-async function syncGSheet() {
-  const btn = event.target;
+async function syncGSheet(btn) {
   btn.disabled = true;
   btn.innerHTML = '<span class="loading"></span>Syncing...';
   try {
@@ -1350,8 +1349,7 @@ async function syncGSheet() {
 }
 
 // ── Google Sheet My Price Sync ────────────────────────────────────
-async function syncMyPricesGSheet() {
-  const btn = event.target;
+async function syncMyPricesGSheet(btn) {
   btn.disabled = true;
   btn.innerHTML = '<span class="loading"></span>Syncing...';
   try {
@@ -3018,8 +3016,7 @@ function renderIntelligence(d) {
   }
 }
 
-async function sendDailySummaryNow() {
-  var btn = event.target;
+async function sendDailySummaryNow(btn) {
   var orig = btn.textContent;
   btn.disabled = true; btn.textContent = 'Sending...';
   try {
