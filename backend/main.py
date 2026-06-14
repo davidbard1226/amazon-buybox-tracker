@@ -1712,11 +1712,28 @@ async def sync_costs_from_gsheet(db: Session = Depends(get_db)):
     updated = 0
     not_found = []
 
+    suffix_pattern = re.compile(r'-(C\d+|FLEX)$', re.IGNORECASE)
+
+    def _base_sku(s):
+        return suffix_pattern.sub('', s).lower()
+
+    # Build a reverse lookup by base SKU (suffix-stripped) for fallback matching
+    sheet_base_lookup: dict = {}
+    for sku_key, entry in sheet_lookup.items():
+        base = _base_sku(sku_key)
+        if base != sku_key:
+            if base not in sheet_base_lookup or entry["cost_price"] < sheet_base_lookup[base]["cost_price"]:
+                sheet_base_lookup[base] = entry
+
     for product in all_products:
         sku = (product.sku or "").strip()
         if not sku:
             continue
         entry = sheet_lookup.get(sku.lower())
+        if not entry:
+            base = _base_sku(sku)
+            if base != sku.lower():
+                entry = sheet_lookup.get(base) or sheet_base_lookup.get(base)
         if entry:
             matched += 1
             product.cost_price = entry["cost_price"]
