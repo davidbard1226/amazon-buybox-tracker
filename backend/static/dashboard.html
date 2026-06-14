@@ -1266,8 +1266,13 @@ async function refreshSelected() {
   const extId = localStorage.getItem('buyboxExtId');
   if (extId && window.chrome && chrome.runtime && chrome.runtime.sendMessage) {
     showAlert('alertBox', '<span class="loading"></span>Opening ' + asins.length + ' tabs in background via Extension (won\'t steal focus)...', 'info');
+    let replied = false;
+    const timeout = setTimeout(() => {
+      if (!replied) { replied = true; _fallbackWindowOpen(urls, asins, baseline, 'selected'); }
+    }, 8000);
     try {
       chrome.runtime.sendMessage(extId, { action: 'batchScrapeUrls', urls }, (resp) => {
+        replied = true; clearTimeout(timeout);
         if (chrome.runtime.lastError || !resp || !resp.success) {
           _fallbackWindowOpen(urls, asins, baseline, 'selected');
         } else {
@@ -1276,7 +1281,7 @@ async function refreshSelected() {
         }
       });
     } catch(e) {
-      _fallbackWindowOpen(urls, asins, baseline, 'selected');
+      if (!replied) { replied = true; clearTimeout(timeout); _fallbackWindowOpen(urls, asins, baseline, 'selected'); }
     }
   } else {
     _fallbackWindowOpen(urls, asins, baseline, 'selected');
@@ -1298,8 +1303,13 @@ async function refreshAll() {
   const extId = localStorage.getItem('buyboxExtId');
   if (extId && window.chrome && chrome.runtime && chrome.runtime.sendMessage) {
     showAlert('alertBox', '<span class="loading"></span>Opening ' + asins.length + ' tabs in background via Extension (won\'t steal focus)...', 'info');
+    let replied = false;
+    const timeout = setTimeout(() => {
+      if (!replied) { replied = true; _fallbackWindowOpen(urls, asins, baseline, 'all'); }
+    }, 8000);
     try {
       chrome.runtime.sendMessage(extId, { action: 'batchScrapeUrls', urls }, (resp) => {
+        replied = true; clearTimeout(timeout);
         if (chrome.runtime.lastError || !resp || !resp.success) {
           _fallbackWindowOpen(urls, asins, baseline, 'all');
         } else {
@@ -1308,7 +1318,7 @@ async function refreshAll() {
         }
       });
     } catch(e) {
-      _fallbackWindowOpen(urls, asins, baseline, 'all');
+      if (!replied) { replied = true; clearTimeout(timeout); _fallbackWindowOpen(urls, asins, baseline, 'all'); }
     }
   } else {
     _fallbackWindowOpen(urls, asins, baseline, 'all');
