@@ -1712,7 +1712,7 @@ async def sync_costs_from_gsheet(db: Session = Depends(get_db)):
     updated = 0
     not_found = []
 
-    suffix_pattern = re.compile(r'-[^-]+$')
+    suffix_pattern = re.compile(r'-(C\d+|FLEX)$', re.IGNORECASE)
 
     def _base_sku(s):
         return suffix_pattern.sub('', s).lower()
