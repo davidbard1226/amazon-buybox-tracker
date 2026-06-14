@@ -512,26 +512,25 @@ async function scrapeAsinInTab(asin, marketplace) {
 
 async function handleBatchScrapeUrls(urls) {
   const PARALLEL = 3;
-  const DELAY_MS = 3000;
+  const OPEN_DELAY_MS = 800;
+  const BATCH_DELAY_MS = 3000;
   let opened = 0;
-  let totalTabs = 0;
 
   for (let i = 0; i < urls.length; i += PARALLEL) {
     const batch = urls.slice(i, i + PARALLEL);
-    const tabIds = await Promise.all(batch.map(url =>
+    await Promise.all(batch.map((url, idx) =>
       new Promise(resolve => {
-        chrome.tabs.create({ url, active: false }, tab => {
-          totalTabs++;
-          resolve(tab.id);
-        });
+        setTimeout(() => {
+          chrome.tabs.create({ url, active: false }, tab => resolve(tab.id));
+        }, idx * OPEN_DELAY_MS);
       })
     ));
     opened += batch.length;
     if (i + PARALLEL < urls.length) {
-      await new Promise(r => setTimeout(r, DELAY_MS));
+      await new Promise(r => setTimeout(r, BATCH_DELAY_MS));
     }
   }
-  return { opened: totalTabs };
+  return { opened };
 }
 
 // ─── Auto-upload price file to Seller Central ────────────────────────────────
